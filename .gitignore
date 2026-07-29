@@ -1,0 +1,39 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Large generated outputs (tracked via LFS selectively)
+outputs/logs/
+outputs/results_solution_a/en/
+outputs/results_solution_a/es/
+outputs/results_solution_a/pt/
+outputs/results_solution_a/ja/
+outputs/results_solution_a/fr/
+outputs/results_solution_b/
+outputs/results_solution_c/
+
+# Debug test artifacts
+debug/debug_test/
+debug/debug_test2/
+debug/e2e_test/
+
+# Model caches
+models/
+*.onnx
+*.pt
+*.pth
+*.safetensors

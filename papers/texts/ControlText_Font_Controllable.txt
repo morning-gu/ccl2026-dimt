@@ -1,0 +1,8 @@
+Title: ControlText: Unlocking Controllable Fonts in Multilingual Text Rendering without Font Annotations
+
+Authors: Authors:Bowen Jiang, Yuan Yuan, Xinyi Bai, Zhuoqun Hao, Alyson Yin, Yaojie Hu, Wenyu Liao, Lyle Ungar, Camillo J. Taylor
+
+ArXiv: 2502.10999
+
+Abstract:
+This work demonstrates that diffusion models can achieve font-controllable multilingual text rendering using just raw images without font label this http URL text rendering remains a significant challenge. While recent methods condition diffusion on glyphs, it is impossible to retrieve exact font annotations from large-scale, real-world datasets, which prevents user-specified font control. To address this, we propose a data-driven solution that integrates the conditional diffusion model with a text segmentation model, utilizing segmentation masks to capture and represent fonts in pixel space in a self-supervised manner, thereby eliminating the need for any ground-truth labels and enabling users to customize text rendering with any multilingual font of their choice. The experiment provides a proof of concept of our algorithm in zero-shot text and font editing across diverse fonts and languages, providing valuable insights for the community and industry toward achieving generalized visual text rendering. Code is available at this http URL.

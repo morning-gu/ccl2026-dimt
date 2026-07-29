@@ -1,0 +1,63 @@
+{
+  "solution": "solution_a",
+  "debug_dir": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a",
+  "total_files": 7,
+  "timestamp": "2026-07-29T17:09:46.734690",
+  "config": {
+    "debug_ocr": true,
+    "debug_mask": true,
+    "debug_erased": true,
+    "debug_translation": true,
+    "debug_style": true,
+    "debug_classification": true,
+    "debug_quality": true,
+    "debug_render": true,
+    "debug_original": true,
+    "debug_context": true,
+    "debug_product": true
+  },
+  "files": [
+    {
+      "path": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a\\001\\original.png",
+      "category": "original",
+      "image": "001",
+      "lang": ""
+    },
+    {
+      "path": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a\\001\\ocr_en.png",
+      "category": "ocr",
+      "image": "001",
+      "lang": "en"
+    },
+    {
+      "path": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a\\001\\classification_en.json",
+      "category": "classification",
+      "image": "001",
+      "lang": "en"
+    },
+    {
+      "path": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a\\001\\translation_en.json",
+      "category": "translation",
+      "image": "001",
+      "lang": "en"
+    },
+    {
+      "path": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a\\001\\mask_en.png",
+      "category": "mask",
+      "image": "001",
+      "lang": "en"
+    },
+    {
+      "path": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a\\001\\erased_en.png",
+      "category": "erased",
+      "image": "001",
+      "lang": "en"
+    },
+    {
+      "path": "C:\\Users\\admin\\Documents\\Codex\\2026-07-29\\new-chat-3\\outputs\\debug\\e2e_test\\solution_a\\001\\render_en.png",
+      "category": "render",
+      "image": "001",
+      "lang": "en"
+    }
+  ]
+}

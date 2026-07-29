@@ -1,0 +1,938 @@
+AnyText2: Visual Text Generation and Editing With Customizable Attributes
+Yuxiang Tuo, Yifeng Geng, Liefeng Bo
+Tongyi Lab, Alibaba Group
+{yuxiang.tyx,cangyu.gyf,liefeng.bo}
+@alibaba-inc.com
+Abstract
+As the text-to-image (T2I) domain progresses, generat-
+ing text that seamlessly integrates with visual content has
+garnered significant attention. However, even with accu-
+rate text generation, the inability to control font and color
+can greatly limit certain applications, and this issue re-
+mains insufficiently addressed. This paper introduces Any-
+Text2, a novel method that enables precise control over
+multilingual text attributes in natural scene image gener-
+ation and editing. Our approach consists of two main
+components. First, we propose a WriteNet+AttnX archi-
+tecture that injects text rendering capabilities into a pre-
+trained T2I model. Compared to its predecessor, AnyText,
+our new approach not only enhances image realism but
+also achieves a 19.8% increase in inference speed. Sec-
+ond, we explore techniques for extracting fonts and colors
+from scene images and develop a Text Embedding Module
+that encodes these text attributes separately as conditions.
+As an extension of AnyText, this method allows for cus-
+tomization of attributes for each line of text, leading to im-
+provements of 3.3% and 9.3% in text accuracy for Chinese
+and English, respectively. Through comprehensive experi-
+ments, we demonstrate the state-of-the-art performance of
+our method. The code and model will be made open-source
+in https://github.com/tyxsspa/AnyText2.
+1. Introduction
+Diffusion-based generative models [13, 32, 34–36] have
+gained prominence due to their ability to generate highly
+realistic images with intricate details, and gradually replac-
+ing previous technologies like GANs [8] and V AEs [17].
+In recent research, models such as DALL·E3 [28], Stable
+Diffusion 3 [6], and FLUX.1 [2] have enhanced their vi-
+sual text rendering capabilities through the introduction of
+new technologies, such as encoding image captions using
+large language models like T5, or employing rectified flow
+transformers. However, the performance of these general-
+purpose T2I models in text rendering still falls short of ex-
+pectations. Therefore, many researchers aim to inject en-
+hanced text rendering capabilities into pre-trained diffusion
+models using various technical methods while maintain-
+ing their diversity and realism in image synthesis. These
+methods, such as GlyphDraw [24], GlyphControl [42],
+TextDiffuser [5], AnyText [40], TextDiffuser-2 [4], Glyph-
+SDXL [22], Glyph-SDXL-v2 [23], GlyphDraw2 [25], not
+only significantly improves the accuracy of text rendering
+but also extends functionalities such as multilingual text
+generation, text editing, automatic or specified layout, and
+even customizable text attributes.
+There are two primary mechanisms for injecting text ren-
+dering capabilities into pre-trained models: (1) conditional
+embeddings in the prompt and (2) auxiliary pixels in the la-
+tent space. The first approach encodes the visual appearance
+of each character as embeddings and combines them with
+image captions, as seen in methods like TextDiffuser-2,
+Glyph-SDXL, and Glyph-SDXL-v2. The second approach
+utilizes text layout masks, injecting them into the latent
+space as catalysts for text rendering, exemplified by meth-
+ods such as TextDiffuser and GlyphControl. However, both
+methods have drawbacks: conditional embeddings struggle
+to generalize to unseen characters, while auxiliary pixels
+suffer from limited integration due to a lack of fusion be-
+tween pre-rendered characters and image captions. To ad-
+dress these limitations, methods like AnyText and Glyph-
+Draw2 employ a combined strategy. Our proposed method,
+AnyText2, also adopts this mechanism but diverges by uti-
+lizing the WriteNet+AttnX architecture. This architecture
+decouples text rendering from image generation before per-
+forming text-image fusion, resulting in a streamlined ap-
+proach that significantly increases inference speed while
+improving image realism.
+In practical applications, users often require not only leg-
+ible text embedded in images but also the ability to specify
+attributes such as font and color. This capability is partic-
+ularly important for generating or editing designs for lo-
+gos, advertisement posters, and product showcase images.
+General-purpose T2I models are unable to achieve effective
+control over fonts and colors described textually in captions.
+1
+arXiv:2411.15245v1  [cs.CV]  22 Nov 2024
+
+A delicate traditional Chinese mooncake on a white plate with carved words and flowers, "中秋" "团圆”(reunion in Mid-Autumn Festival)
+A fancy square birthday cake on the table, texts written in cream, close-up view, top-down perspective, textsare “Generated" "by" "AnyText2"
+Text GenerationText Editing
+Figure 1. AnyText2 can accurately generate multilingual text within images and achieve a realistic integration. Furthermore, it allows
+for customized attributes for each line, such as controlling the font style through font files, mimicking an image using a brush tool, and
+specifying the text color. Additionally, AnyText2 enables customizable attribute editing of text within images.
+Recent works, such as DiffSTE [16] and Glyph-SDXL [22],
+have attempted to address this issue by training on synthetic
+image data, significantly enhancing the understanding of
+font and color descriptions in captions. However, this ap-
+proach has two drawbacks: first, any font or color names
+not included in the training dataset will not be recognized;
+second, training on synthetic data primarily produces over-
+laid text rather thanembedded text, which limits its applica-
+bility in real-world contexts. To overcome these limitations,
+we propose a novel method that extracts text attribute labels
+from natural scene images and introduces a Text Embed-
+ding Module that encodes each attribute as individual con-
+ditions. This offers great flexibility during the application,
+as users no longer need to describe text attributes in cap-
+tions; instead, they can control fonts by specifying font files
+or by uploading images containing text in a particular style.
+Color can be controlled through a color picker or palette.
+More importantly, our method generates both overlaid and
+embedded text applicable in open-domain scenarios. Se-
+lected examples are presented in Fig. 1.
+2. Related Works
+Controllable Text-To-Image Generation In T2I models,
+achieving precise control through pure textual descriptions
+poses significant challenges, and a multitude of methods
+have emerged. Among the pioneering works are Control-
+Net [45], T2I Adapter [27], and Composer [15], lever-
+age control conditions such as depth maps, pose images,
+and sketches to guide image generation. Another category
+is comprised of subject-driven methods, such as Textual
+Inversion [7], DreamBooth [38], IP-Adapter [44], Refer-
+enceNet [14], InstantID [41], and PhotoMaker [20]. These
+methods focus on learning the representation of a specific
+subject or concept from one or a few images, primarily en-
+suring identity preservation in the generated images while
+allowing less stringent control over other attributes such as
+position, size, and orientation. Visual text generation can be
+viewed as a sub-task within this framework if we consider
+each character as an identity.
+Visual Text Generation The text encoder plays a crucial
+role in generating accurate visual text, as highlighted by
+[21]. Many subsequent methods adopted character-level
+text encoders to incorporate word spelling or character vi-
+sual appearance into conditional embeddings, such as Diff-
+STE [16], TextDiffuser-2 [4], UDiffText [47], and Glyph-
+SDXL [22]. In contrast, TextDiffuser [5] and GlyphCon-
+trol [42] utilize text layout masks and inject them into
+the latent space to assist in text generation. Furthermore,
+AnyText [40] and GlyphDraw2 [25] leverage pre-rendered
+glyph images as auxiliary pixels and employ a pre-trained
+OCR model [18] to encode strokes, which are then inte-
+grated into the conditional embeddings. Additionally, meth-
+ods like UDiffText, Brush Your Text [46], and Glyph-SDXL
+impose restrictive interventions on attention maps in corre-
+sponding text areas to improve accuracy. In contrast, our
+approach employs a position encoder to encode text posi-
+tion and injects it into the conditional embeddings, allowing
+for spatial awareness.
+Text Attributes CustomizationNumerous studies have ex-
+2
+
+plored font style transfer using GANs or diffusion models,
+categorized as Few-shot Font Generation (FFG), including
+LF-Font [30], MX-Font [31], Diff-Font [10], and FontD-
+iffuser [43]. While our work shares the goal of decou-
+pling content and style from reference characters, we focus
+on generating text in a specified style directly onto an im-
+age, as opposed to automatically creating a library of plain
+characters. Regarding color control, general-purpose T2I
+models often have difficulty interpreting RGB values spec-
+ified in prompts. To address this issue, ColorPeel [3] con-
+structs a synthetic dataset and decouples color and shape
+during training, facilitating the learning of specific color to-
+kens for precise color control. In visual text generation, the
+use of synthetic data for customizing text attributes is also
+an intuitive approach. Notably, DiffSTE [16] and Glyph-
+SDXL [22] allow for the integration of font and color names
+directly into prompts, enabling diffusion models to learn
+these concepts and facilitating precise control over text at-
+tributes during inference.
+3. Methodology
+AnyText2 is designed as a plugin for pretrained T2I mod-
+els to enhance their text rendering capabilities. The frame-
+work is depicted in Fig. 2. In the standard Latent Diffusion
+Model (LDM) [36], the original latent pixels z0 are gradu-
+ally adding noise ϵ through a forward diffusion process to
+obtain a noisy latent pixelszt. The image prompt is then en-
+coded into conditional embeddings cie using a pre-trained
+CLIP [33] text encoder. Both zt and cie are then fed into
+a conditional U-Net [37] denoiser ϵθ to predict the noise.
+The final image is generated after t time steps of the reverse
+denoising process. To enhance text rendering capabilities,
+we utilize an Auxiliary Latent Module, similar to AnyText,
+which encodes the glyph, position, and optionally a masked
+image (to enable text editing), producing auxiliary pixels
+za. The text prompt is processed through a Text Embed-
+ding Module to obtain the conditional embeddingscte. This
+Module comprises multiple encoders designed to facilitate
+various conditional controls. Both (zt, cie) and (za, cte) un-
+dergo cross-attention computations in U-Net and WriteNet
+to better guide the image and text generation, respectively.
+The integration of image and text is then performed through
+the U-Net decoder with inserted AttnX layers. More for-
+mally, the optimization objective of our method is repre-
+sented by the following equation:
+L = Ez0,cie,za,cte,t,ϵ∼N (0,1)
+
+∥ϵ − ϵθ(zt, za, cte, cie, t)∥2
+2
+
+(1)
+Next, we will provide a detailed introduction to the key
+components.
+3.1. WriteNet+AttnX
+Currently, numerous works [25, 40, 42, 46] utilize a
+ControlNet-like module as a core component for text gen-
+eration. Typically, the input to the ControlNet includes
+not only conditional signals but also noisy latent images
+and captions describing the image content. In other words,
+the module is responsible for generating image content in
+collaboration with the U-Net rather than merely encoding
+text information (as analyzed in Appendix A). This method
+presents two significant issues. First, the training data for
+text generation tasks often contains a considerable amount
+of low-quality images with chaotic text, and involving the
+learnable ControlNet-like module in image generation may
+potentially degrade image quality. Second, encoding iden-
+tical text information (glyphs, positions, etc.) at each time
+step can reduce inference efficiency. To address these con-
+cerns, we have transformed the ControlNet-like module into
+WriteNet by removing the timestep layers and eliminating
+any image-related inputs, including noisy latent and de-
+scriptions of image content in the prompt, thus conduct-
+ing inference only once. WriteNet focuses exclusively on
+learning how to write text, while the production-ready U-
+Net, trained on billions of images, is solely responsible for
+generating the image content.
+To achieve seamless blending of the intermediate text
+features with the image content, it is essential for them to
+adequately interact with image latent pixels and conditional
+embeddings. This interaction can be facilitated through the
+self-attention and cross-attention mechanisms. Therefore,
+we insert trainable self-attention and cross-attention layers,
+denoted as AttnX layers, within the attention blocks in the
+middle and decoder part of the U-Net. The output from
+each AttnX layer is multiplied by a strength coefficient α
+and combined with the output from the previous layer via
+a shortcut connection. By adjusting α, we can modulate
+the fusion strength between text and image, as illustrated
+in Fig. 3. Similarly, the output from WriteNet is also mul-
+tiplied by a strength coefficient β to regulate the intensity
+of the injected intermediate text features. Notably, setting
+both α = 0and β = 0allows AnyText2 to generate images
+without text, relying solely on the original diffusion model.
+3.2. Text Embedding Module
+The Text Embedding Module incorporates four encoders,
+denoted as ξg, ξp, ξf , and ξc, which are designed to encode
+the glyph image eg, position image ep, font image ef , and
+text color ec, respectively. The features output by each en-
+coder are mapped to embeddings with the same dimension,
+which are then summed to produce a representation ri that
+effectively captures the attributes of the i-th text line:
+ri = ξg(eg) +ξp(ep) +ξf (ef ) +ξc(ec) (2)
+3
+
+𝒛𝒕
+𝒛𝒂
+❄UNet
+❄
+Text Prompt：Texts are"BEVERLY" and "HILLS"
+WriteNet
+🔥
+Image Prompt: Photo of a lush estate with a sign with words
+Auxiliary Latent Module
+RGB(251,249,240)
+GlyphRender FontExtractorColorPicker 
+Glyph  Encoder 𝝃gPosi1on  Encoder 𝝃pFont  Encoder 𝝃𝐟 Color  Encoder 𝝃𝐜
+Text Embedding Module
+⊕⊕⊕
+𝒄𝒕𝒆
+𝒄𝒊𝒆
+Glyph	𝒍𝒈
+Position 𝒍𝒑
+Mask 𝒍𝒎
++SELF
+🔥CROSS
+🔥RES
+❄SELF
+❄CROSS
+❄
+x
++
+x······A2nX Layers
+𝒛𝟎diﬀusion
+🔥 Learnable models
+❄ Frozen modelsText FeaturesImage Features
+Glyph 𝒆𝒈Position 𝒆𝒑Font 𝒆𝒇 Color 𝒆𝒄
+🔥
+🔥
+🔥
+🔥
+🔥
+(optional)
+Figure 2. The framework of AnyText2, which is designed with a WriteNet+AttnX architecture to integrate text generation capability into
+pre-train diffusion models, and there is a Text Embedding Module to provide various conditional control for text generation.
+photo of caramel macchiato coffee on the table, top-down perspective, with words written on it, "Any" "Text2"
+An ancient Chinese copper coin, The text above is “图” “文” “融” “合” (text-image fusion)
+α=0α=0.5α=0.8α=1.0
+Figure 3. By adjusting the strength coefficient α from 0 to 1 shows that the text-image fusion is gradually improving.
+For the text prompt yt, each text line is replaced with a spe-
+cial placeholder S∗. After performing tokenization and em-
+bedding lookup, denoted as ϕ(·), embeddings of all tokens
+are obtained. We then substitute the attribute representa-
+tions of n text lines back at S∗ and utilize the CLIP text
+encoder τθ to generate the final conditional embeddingscte:
+cte = τθ(ϕ(yt), r0, r1, ..., rn−1) (3)
+For the glyph encoder ξg, we employ PP-OCRv3 [18] to
+extract the glyph features as done in AnyText. Next, we
+will provide a detailed introduction to the other encoders.
+3.2.1. Position Encoder
+In the Cross-Attention mechanisms, the attention map is
+computed as:
+M = Sof tmax( QK T
+√
+d
+) (4)
+Intuitively, M reflects the similarity between Q and K.
+More specifically, in our context, the element Mij defines
+the weight of the j-th conditional embedding on the i-th
+auxiliary pixel. However, the embedding of a particular text
+line is not explicitly associated with the pixels correspond-
+ing to its text area. Therefore, we introduce a position en-
+coder ξp that employs four stacked convolutional layers to
+4
+
+encode the position image ep, followed by an average pool-
+ing layer. By utilizing ξp, we introduce spatial information
+for each text line, enabling the embedding to achieve spatial
+awareness. In the ablation study in Sec. 5.3.1, we demon-
+strate that this significantly improves the text accuracy.
+3.2.2. Font Encoder
+Instead of striving for precise separation of text from the
+complex background, we employ a straightforward adaptive
+threshold on the text regions to construct a font extractor,
+resulting in a rough binary image that serves as the font im-
+age ef . Examples can be found in Appendix B. We utilize
+PP-OCRv3 [18], just as in the glyph encoder ξg, to con-
+struct our font encoder ξf ; the only difference is that the
+OCR model is set to be trainable. The rationale behind this
+design is that the OCR model inherently focuses on the text
+portions despite a noisy background. Additionally, the OCR
+model naturally perceives font types and is trained to be in-
+variant to font variations. To shift its attention from glyphs
+to fonts, we allow the parameters to be trainable throughout
+the training process. Our attempts have revealed that this
+design excels at encoding font styles, while other network
+architectures, such as convolutional layers or the pre-trained
+DINOv2 [29], struggle to encode these noisy font images.
+During inference, to construct ef , we can either render the
+text using a user-specified font or select a text region from
+an image and input it into the font extractor. More exam-
+ples are illustrated in Fig. 4. Notably, incorporating font
+style features into the conditional embeddings enhances the
+similarity between Q and K in Equation 4, which in turn
+improves text accuracy, as detailed in Sec. 5.3.1.
+3.2.3. Color Encoder
+We employ a non-learning method to create a color picker
+for obtaining the RGB labels of the text. Initially, the colors
+of all pixels within the text region are clustered and ranked,
+from which we select the top dominant color blocks. We
+then analyze their shapes and positions using morphological
+analysis techniques to identify the most likely text blocks,
+outputting the mean RGB value as the text color ec. Ac-
+cording to our statistics, approximately 65% text lines in
+the training data conform to specific criteria, yielding reli-
+able color labels with an accuracy exceeding 90%. Exam-
+ples can be found in Appendix B. In constructing the color
+encoder ξc, we experimented with various techniques, in-
+cluding Fourier feature encoding and convolutional layers.
+However, our attempts have revealed that a simple linear
+projection layer is sufficient to encode the three RGB val-
+ues. More examples are illustrated in Fig. 4.
+4. Dataset and Benchmark
+We utilize AnyWord-3M [40], a large-scale multilingual
+dataset as our training dataset. The dataset contains 3.53
+million images, representing a diverse array of scenes con-
+taining text, such as street views, book covers, advertise-
+ments, posters, and movie frames. However, the captions in
+AnyWord-3M were generated by BLIP-2 [19], which lack
+detailed and accurate descriptions. To improve this, we re-
+generated the captions using QWen-VL [1]. Statistics anal-
+ysis reveals that the BLIP-2 captions contain only 8 words
+on average, while those generated by QWen-VL are around
+47 words. This substantial increase in caption length sig-
+nificantly enhances the description of image details. In the
+ablation study detailed in Sec. 5.3.2, we found that while
+longer captions slightly reduce text accuracy, they signifi-
+cantly improve the model’s prompt-following ability. Thus,
+we opted to train with the longer captions. Examples of
+training images and captions can be found in Appendix E.
+We use the AnyText-benchmark to evaluate the per-
+formance of the model, which includes 1,000 images ex-
+tracted from Wukong [9] and 1000 images from LAION-
+400M [39]. This benchmark quantitatively assesses the
+model’s performance in Chinese and English generation,
+respectively. The benchmark employs three evaluation
+metrics: Sentence Accuracy (Sen.ACC) and Normalized
+Edit Distance (NED) for measuring text accuracy using the
+DuGangOCR [26] model, as well as the Frechet Inception
+Distance (FID) for assessing image authenticity. In addi-
+tion to these, we incorporate CLIPScore [12] to evaluate
+the model’s prompt-following capability.
+5. Experiments
+5.1. Implementation Details
+We use SD1.5 1 to initialize the model weights. The
+model was trained for 10 epochs on AnyWord-3M using
+8 Tesla A100 GPUs, taking approximately two weeks. The
+AdamW optimizer is employed with a learning rate of 2e-
+5 and a batch size of 48. The resolutions of lg, lp, lm,
+and ep are 512x512, while the resolutions of eg and ef are
+80x512. The strength coefficients α and β are configured to
+1.0. A probability of 50% is applied to choose between in-
+putting lm or an empty image, facilitating training for both
+text generation and editing. A probability of 20% is used
+to input an empty ef , enabling the model to generate ran-
+dom fonts when no font style is specified. Approximately
+35% of ec are assigned a default value due to the absence
+of color labels, allowing for the generation of text in ran-
+dom colors when no color is specified. For image prompts
+that exceed the maximum length of CLIP, they are split into
+chunks, processed separately, and then concatenated. For
+text prompts, we randomly select a phrase from a template
+and concatenate it with the text content, such as ‘Image with
+words...’ or ‘Text says...’. Compared to AnyText, we have
+only increased the parameters by 4.5%(63.8M), while the
+1https://huggingface.co/runwayml/stable-diffusion-v1-5
+5
+
+A meticulously designed sticker of a robot, with words on it, “人工智能”(artificial intelligence)
+A cozy scene featuring a vibrant ceramic mug on a wooden table, elegantly inscribed with words, “Neural”, "Network"
+A raccoon stands in front of the blackboard with words written on it, “Deep Learning”
+A raccoon stands in front of the blackboard with words written on it, “深度学习”(deep learning)
+A beautiful baseball cap on a wooden table with knitted text on it, "生成式模型”(generative model)
+Figure 4. Examples of customizing text attributes. The first row demonstrates font style control using a user-specified font file. The second
+row showcases selecting a text region from an image to mimic its font style. The third row illustrates the control of text color.
+design of WriteNet+AttnX architecture has improved the
+inference speed by 19.8%, as detailed in Appendix D.
+5.2. Comparison results
+5.2.1. Quantitative Results
+We evaluated ControlNet [45], TextDiffuser [5], GlyphCon-
+trol [42], AnyText [40], and GlyphDraw2 [25] using the
+benchmarks and metrics outlined in Sec. 4. To ensure a
+fair evaluation, all publicly available methods employed the
+DDIM sampler with 20 sampling steps, a CFG scale of 9, a
+fixed random seed of 100, a batch size of 4, and consistent
+positive and negative prompt words. The quantitative com-
+parison results are presented in Table 1. For GlyphDraw2,
+we referenced the metrics reported in their paper, achieving
+a 7.27% improvement in English Sentence Accuracy (Sen.
+ACC). A comparison for Chinese was not included as they
+utilized the PW Acc metric and insufficient details were pro-
+vided. Notably, AnyText2 outperformed AnyText across all
+evaluation metrics, particularly in the long caption scenario,
+where it improved English and Chinese Sen. ACC by 9.3%
+and 3.3%, respectively. Furthermore, it demonstrated sig-
+nificant enhancements in image realism (FID) and prompt-
+following (CLIPScore).
+5.2.2. Qualitative Results
+As shown in Fig. 5, we conducted a qualitative compar-
+ison of AnyText2 with several recent methods, including
+TextDiffuser-2 [4], Glyph-SDXL-v2 [23], Stable Diffusion
+3 [6], and FLUX.1 [2]. The image captions in the left-
+most column are input directly to TextDiffuser-2, SD3, and
+FLUX.1. For Glyph-SDXL-v2 and AnyText2, the inputs
+were adjusted according to each method’s requirements,
+which included manually setting the layout and selecting
+appropriate text fonts or colors based on the captions. Each
+method underwent multiple trials, and we present one of the
+best results. From the results, TextDiffuser-2 demonstrates
+subpar performance in text accuracy, particularly when han-
+dling multiple lines. Glyph-SDXL-v2 achieves good accu-
+racy and allows for precise customization of text fonts and
+colors in multilingual text; however, it is limited to generat-
+ing overlaid text on images, showing little correlation to the
+image content. Although SD3 produces visually appealing
+images, its accuracy in English is moderate, offering only
+rough control over colors and minimal control over fonts.
+FLUX.1 generates impressive visual results while maintain-
+ing decent English accuracy, though it suffers from occa-
+sional capitalization errors. Unfortunately, it only permits
+rough control over simple fonts and colors in the prompt
+and is limited to the English generation. In comparison,
+AnyText2 stands out with the best accuracy, the most pre-
+cise control over text attributes, seamless text-image inte-
+gration, and robust multilingual support.
+5.3. Ablation study
+We extracted 200k images from AnyWord-3M, which in-
+cludes 100k images each for Chinese and English, and
+6
+
+Table 1. Quantitative comparison of AnyText2 and competing methods. †is trained on LAION-Glyph-10M, and ‡is fine-tuned on TextCaps-
+5k. Numbers in brown color represent the results obtained using the long caption version of the AnyText-benchmark.
+Methods English Chinese
+Sen.ACC↑ NED↑ FID↓ CLIPScore↑ Sen.ACC↑ NED↑ FID↓ CLIPScore↑
+ControlNet 0.5837 0.8015 45.41 0.8448 0.3620 0.6227 41.86 0.7801
+TextDiffuser 0.5921 0.7951 41.31 0.8685 0.0605 0.1262 53.37 0.7675
+GlyphControl† 0.3710 0.6680 37.84 0.8847 0.0327 0.0845 34.36 0.8048
+GlyphControl‡ 0.5262 0.7529 43.10 0.8548 0.0454 0.1017 49.51 0.7863
+Anytext 0.7239 0.8760 33.54 0.8841 0.6923 0.8396 31.58 0.8015
+0.7242 0.8780 35.27 0.9602 0.6917 0.8373 31.38 0.8870
+GlyphDraw2 0.7369 0.8921 - - - - - -
+Anytext2 0.8096 0.9184 33.32 0.8963 0.7130 0.8516 27.94 0.8139
+0.8175 0.9193 27.87 0.9882 0.7250 0.8529 24.32 0.9137
+A burger patty, with the bottom bun and lettuce and tomatoes. words “COFFEE”written on it in mustard
+a bear holds a board  with words written on it, "You Never Fail Until You Stop" in blue and handwriting font, "TRYING!" in red and print font.
+Resting on the kitchen table is an embroidered cloth with a cute baby tiger and words "晚安" in yellow, "Goodnight" in light blue. All words are in Arial font. Next to the cloth there is a lit candle.
+a yellow badge on the wooden table with a kangaroo on it, and that reads "No KANGAROOS IN AUSTRIA" in Times New Roman font.
+TextDiffuser-2Glyph-SDXL-v2Stable	Diffusion	3FLUX.1AnyText2
+Figure 5. Qualitative comparison of AnyText2 and other methods. From the perspectives of text accuracy, text-image integration, attribute
+customization, and multilingual support, AnyText2 demonstrated significant advantages.
+conducted ablation experiments by training on this small-
+scale dataset for 15 epochs to validate each module of
+our method. Next, we will analyze our method from two
+perspectives: accuracy and realism, as well as prompt-
+following capability.
+5.3.1. Accuracy and Realism
+In Table 2, we validated the effectiveness of each mod-
+ule in AnyText2. In Exp.1, the original AnyText serves
+as the baseline. Incrementally adding the position and font
+encoders in the Text Embedding Module during Exp.2&3
+significantly boosted text accuracy, attributed to improved
+similarity between auxiliary pixels and conditional embed-
+dings. In Exp.4, adding the color encoder resulted in a slight
+decline in accuracy, possibly due to incorrect ground truths
+in color labels and challenges in learning text colors against
+complex backgrounds. Exp.5-7 demonstrated that AttnX
+layers improved text accuracy, with their position affecting
+the FID score. Specifically, inserting AttnX closer to the U-
+Net output led to a tendency for it to directly copy glyphs
+from the auxiliary pixels due to U-Net’s skip connections
+rather than learning to generate them. Thus, we inserted At-
+tnX in the first two blocks of the U-Net decoder for optimal
+accuracy and realism. In Exp. 8, replacing the ControlNet-
+like module with WriteNet slightly decreased accuracy but
+7
+
+Table 2. Ablation experiments of AnyText2 on a small-scale dataset from AnyWord-3M.
+Exp. Pos. Font Color AttnX WriteNet English Chinese
+2 1 0 Sen.ACC↑ NED↑ FID↓ Sen.ACC↑ NED↑ FID↓
+1 0.4873 0.7721 35.38 0.5404 0.7631 31.19
+2 ✓ 0.5237 0.7876 35.86 0.5681 0.7725 29.45
+3 ✓ ✓ 0.5926 0.8276 38.57 0.5688 0.7763 31.60
+4 ✓ ✓ ✓ 0.5732 0.8169 37.24 0.5525 0.7620 32.69
+5 ✓ ✓ ✓ ✓ ✓ ✓ 0.6372 0.8481 44.98 0.5632 0.7769 35.84
+6 ✓ ✓ ✓ ✓ ✓ 0.6391 0.8490 39.14 0.5760 0.7858 32.92
+7 ✓ ✓ ✓ ✓ 0.6343 0.8478 37.21 0.5527 0.7696 28.91
+8 ✓ ✓ ✓ ✓ ✓ ✓ 0.6335 0.8443 35.19 0.5614 0.7731 29.40
+Table 3. Ablation experiments of training AnyText2 using both
+short(6S) and long captions(6L), evaluated with the the AnyText-
+benchmark under both short and long caption (marked in brown)
+scenarios. Eps denotes Epochs, S.A denotes Sen.ACC, and C.P
+denotes CLIPScore.
+Exp. Eps English Chinese
+S.A↑ NED↑ C.S↑ S.A↑ NED↑ C.S↑
+6S 15 0.6391 0.8490 0.8797 0.5760 0.7858 0.7941
+6L 0.6094 0.8296 0.8734 0.4995 0.7401 0.7952
+6S 19 0.6313 0.8459 0.8828 0.5719 0.7830 0.7948
+6L 0.6182 0.8360 0.8773 0.5541 0.7710 0.8036
+6S 15 0.6479 0.8481 0.8577 0.5606 0.7738 0.7333
+6L 0.6305 0.8412 0.8650 0.5055 0.7422 0.7511
+6S 19 0.6453 0.8476 0.8596 0.5639 0.7784 0.7372
+6L 0.6357 0.8431 0.8665 0.5618 0.7738 0.7542
+significantly improved the FID score. This aligns with our
+expectation of a trade-off between image realism and text
+accuracy, as embedded text is more challenging for OCR
+than overlaid text despite being more realistic. Considering
+accuracy, realism, and inference efficiency, we selected the
+configuration from Exp.8 for training on the full dataset.
+5.3.2. Prompt-Following
+We trained two models in the configuration of Exp.6 us-
+ing short (6S) and long (6L) captions to examine the im-
+pact of caption length on accuracy and prompt-following,
+as shown in Table 3. The first two rows indicate a signifi-
+cant accuracy drop with long captions, particularly a 7.6%
+decrease in Chinese Sen. ACC. This decline was partly due
+to the model with long captions not fully converging on the
+small-scale training set. After continuing training for an ad-
+ditional 4 epochs, Exp.6S metrics reached saturation while
+those for Exp.6L improved. Although the performance gap
+narrowed, Exp.6L’s CLIPScore remained comparable. We
+then replaced the AnyText benchmark with long captions,
+observing a similar trend. After 19 epochs, the accuracy
+gap further diminished, but Exp.6L’s CLIPScore was sig-
+nificantly higher than Exp.6S. These findings suggest that
+training with long captions may slightly decrease text ac-
+curacy while enhancing prompt-following capabilities, par-
+ticularly for complex captions. Therefore, we opted to use
+long captions for training on the full dataset.
+6. Conclusion
+In this paper, we introduced AnyText2, a novel method that
+tackles the cutting-edge challenge of precisely controlling
+text attributes in realistic image generation. We explored
+techniques for extracting font and color labels from natural
+scene images and developed dedicated encoders for feature
+representation, enabling the customization of text attributes
+for each line. Additionally, we conducted an in-depth analy-
+sis of visual text generation mechanisms and creatively pro-
+posed the WriteNet+AttnX architecture, which decouples
+text and image generation tasks while effectively integrating
+them through attention layers. Our approach outperformed
+its predecessor, AnyText, achieving higher accuracy, en-
+hanced realism, and faster inference speed. Furthermore,
+the model’s prompt-following capabilities were bolstered
+through the use of long captions. In future work, we will
+continue to push the boundaries of visual text generation
+and aim to gradually port AnyText2 to more innovative T2I
+models.
+References
+[1] Jinze Bai, Shuai Bai, Shusheng Yang, Shijie Wang, Sinan
+Tan, Peng Wang, Junyang Lin, Chang Zhou, and Jingren
+Zhou. Qwen-vl: A versatile vision-language model for un-
+derstanding, localization, text reading, and beyond. arXiv
+preprint arXiv:2308.12966, 2023. 5
+[2] BlackForestLab. Flux.1. https : / /
+blackforestlabs . ai / announcing - black -
+forest-labs/, 2024. 1, 6
+[3] Muhammad Atif Butt, Kai Wang, Javier Vazquez-Corral, and
+Joost van de Weijer. Colorpeel: Color prompt learning with
+diffusion models via color and shape disentanglement, 2024.
+3
+[4] Jingye Chen, Yupan Huang, Tengchao Lv, Lei Cui, Qifeng
+Chen, and Furu Wei. Textdiffuser-2: Unleashing the power
+of language models for text rendering. arXiv preprint
+arXiv:2311.16465, 2023. 1, 2, 6
+[5] Jingye Chen, Yupan Huang, Tengchao Lv, Lei Cui, Qifeng
+Chen, and Furu Wei. Textdiffuser: Diffusion models as text
+painters. arXiv preprint, abs/2305.10855, 2023. 1, 2, 6
+[6] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim
+Entezari, Jonas M ¨uller, Harry Saini, Yam Levi, Dominik
+8
+
+Lorenz, Axel Sauer, Frederic Boesel, Dustin Podell, Tim
+Dockhorn, Zion English, and Robin Rombach. Scaling rec-
+tified flow transformers for high-resolution image synthesis.
+In ICML, 2024. 1, 6
+[7] Rinon Gal, Yuval Alaluf, Yuval Atzmon, Or Patashnik,
+Amit Haim Bermano, Gal Chechik, and Daniel Cohen-Or.
+An image is worth one word: Personalizing text-to-image
+generation using textual inversion. In ICLR, 2023. 2
+[8] Ian J. Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing
+Xu, David Warde-Farley, Sherjil Ozair, Aaron C. Courville,
+and Yoshua Bengio. Generative adversarial nets. InNeurIPS,
+2014. 1
+[9] Jiaxi Gu, Xiaojun Meng, Guansong Lu, Lu Hou, Minzhe
+Niu, Hang Xu, Xiaodan Liang, Wei Zhang, Xin Jiang, and
+Chunjing Xu. Wukong: 100 million large-scale chinese
+cross-modal pre-training dataset and A foundation frame-
+work. CoRR, abs/2202.06767, 2022. 5
+[10] Haibin He, Xinyuan Chen, Chaoyue Wang, Juhua Liu, Bo
+Du, Dacheng Tao, and Yu Qiao. Diff-font: Diffusion model
+for robust one-shot font generation. IJCV, abs/2212.05895,
+2024. 3
+[11] Amir Hertz, Ron Mokady, Jay Tenenbaum, Kfir Aberman,
+Yael Pritch, and Daniel Cohen-Or. Prompt-to-prompt image
+editing with cross-attention control. In ICLR, 2023. 1
+[12] Jack Hessel, Ari Holtzman, Maxwell Forbes, Ronan Le Bras,
+and Yejin Choi. Clipscore: A reference-free evaluation met-
+ric for image captioning. In EMNLP, 2021. 5
+[13] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffu-
+sion probabilistic models. In NeurIPS, 2020. 1
+[14] Li Hu, Xin Gao, Peng Zhang, Ke Sun, Bang Zhang, and
+Liefeng Bo. Animate anyone: Consistent and controllable
+image-to-video synthesis for character animation. CoRR,
+2023. 2
+[15] Lianghua Huang, Di Chen, Yu Liu, Yujun Shen, Deli Zhao,
+and Jingren Zhou. Composer: Creative and controllable im-
+age synthesis with composable conditions. arXiv preprint,
+abs/2302.09778, 2023. 2
+[16] Jiabao Ji, Guanhua Zhang, Zhaowen Wang, Bairu Hou,
+Zhifei Zhang, Brian Price, and Shiyu Chang. Improving
+diffusion models for scene text editing with dual encoders,
+2023. 2, 3
+[17] Diederik P. Kingma and Max Welling. Auto-encoding vari-
+ational bayes. In ICLR, 2014. 1
+[18] Chenxia Li, Weiwei Liu, Ruoyu Guo, Xiaoting Yin, Kaitao
+Jiang, Yongkun Du, Yuning Du, Lingfeng Zhu, Baohua Lai,
+Xiaoguang Hu, Dianhai Yu, and Yanjun Ma. Pp-ocrv3: More
+attempts for the improvement of ultra lightweight OCR sys-
+tem. CoRR, abs/2206.03001, 2022. 2, 4, 5
+[19] Junnan Li, Dongxu Li, Silvio Savarese, and Steven C. H.
+Hoi. BLIP-2: bootstrapping language-image pre-training
+with frozen image encoders and large language models.
+arXiv preprint, abs/2301.12597, 2023. 5
+[20] Zhen Li, Mingdeng Cao, Xintao Wang, Zhongang Qi, Ming-
+Ming Cheng, and Ying Shan. Photomaker: Customizing
+realistic human photos via stacked id embedding. In IEEE
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 2024. 2
+[21] Rosanne Liu, Dan Garrette, Chitwan Saharia, William Chan,
+Adam Roberts, Sharan Narang, Irina Blok, RJ Mical, Mo-
+hammad Norouzi, and Noah Constant. Character-aware
+models improve visual text rendering. InACL, pages 16270–
+16297, 2023. 2
+[22] Zeyu Liu, Weicong Liang, Zhanhao Liang, Chong Luo, Ji
+Li, Gao Huang, and Yuhui Yuan. Glyph-byt5: A customized
+text encoder for accurate visual text rendering.arXiv preprint
+arXiv:2403.09622, 2024. 1, 2, 3
+[23] Zeyu Liu, Weicong Liang, Yiming Zhao, Bohan Chen, Ji Li,
+and Yuhui Yuan. Glyph-byt5-v2: A strong aesthetic base-
+line for accurate multilingual visual text rendering. arXiv
+preprint arXiv:2406.10208, 2024. 1, 6
+[24] Jian Ma, Mingjun Zhao, Chen Chen, Ruichen Wang, Di Niu,
+Haonan Lu, and Xiaodong Lin. Glyphdraw: Learning to
+draw chinese characters in image synthesis models coher-
+ently. arXiv preprint, abs/2303.17870, 2023. 1
+[25] Jian Ma, Yonglin Deng, Chen Chen, Haonan Lu, and Zhenyu
+Yang. Glyphdraw2: Automatic generation of complex glyph
+posters with diffusion models and large language models.
+CoRR, 2024. 1, 2, 3, 6
+[26] ModelScope. Duguangocr. https://modelscope.
+cn / models / damo / cv _ convnextTiny _ ocr -
+recognition-general_damo/summary, 2023. 5
+[27] Chong Mou, Xintao Wang, Liangbin Xie, Jian Zhang, Zhon-
+gang Qi, Ying Shan, and Xiaohu Qie. T2i-adapter: Learning
+adapters to dig out more controllable ability for text-to-image
+diffusion models. arXiv preprint, abs/2302.08453, 2023. 2
+[28] OpenAI. Dall·e3. https://openai.com/index/
+dall-e-3/, 2023. 1
+[29] Maxime Oquab, Timoth ´ee Darcet, Theo Moutakanni, Huy V .
+V o, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez,
+Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, Rus-
+sell Howes, Po-Yao Huang, Hu Xu, Vasu Sharma, Shang-
+Wen Li, Wojciech Galuba, Mike Rabbat, Mido Assran, Nico-
+las Ballas, Gabriel Synnaeve, Ishan Misra, Herve Jegou,
+Julien Mairal, Patrick Labatut, Armand Joulin, and Piotr Bo-
+janowski. Dinov2: Learning robust visual features without
+supervision, 2023. 5
+[30] Song Park, Sanghyuk Chun, Junbum Cha, Bado Lee, and
+Hyunjung Shim. Few-shot font generation with localized
+style representations and factorization. InAAAI, pages 2393–
+2402, 2021. 3
+[31] Song Park, Sanghyuk Chun, Junbum Cha, Bado Lee, and
+Hyunjung Shim. Multiple heads are better than one: Few-
+shot font generation with multiple localized experts. In
+ICCV, pages 13880–13889, 2021. 3
+[32] Dustin Podell, Zion English, Kyle Lacey, Andreas
+Blattmann, Tim Dockhorn, Jonas M ¨uller, Joe Penna, and
+Robin Rombach. SDXL: improving latent diffusion models
+for high-resolution image synthesis. In ICLR, 2024. 1
+[33] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, Gretchen
+Krueger, and Ilya Sutskever. Learning transferable visual
+models from natural language supervision. In ICML, 2021.
+3
+9
+
+[34] Aditya Ramesh, Mikhail Pavlov, Gabriel Goh, Scott Gray,
+Chelsea V oss, Alec Radford, Mark Chen, and Ilya Sutskever.
+Zero-shot text-to-image generation. In ICML, pages 8821–
+8831. PMLR, 2021. 1
+[35] Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey Chu,
+and Mark Chen. Hierarchical text-conditional image gen-
+eration with CLIP latents. arXiv preprint, abs/2204.06125,
+2022.
+[36] Robin Rombach, Andreas Blattmann, Dominik Lorenz,
+Patrick Esser, and Bj¨orn Ommer. High-resolution image syn-
+thesis with latent diffusion models. In CVPR, pages 10684–
+10695, 2022. 1, 3
+[37] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-net:
+Convolutional networks for biomedical image segmentation.
+In MICCAI, 2015. 3
+[38] Nataniel Ruiz, Yuanzhen Li, Varun Jampani, Yael Pritch,
+Michael Rubinstein, and Kfir Aberman. Dreambooth: Fine
+tuning text-to-image diffusion models for subject-driven
+generation. arXiv preprint, abs/2208.12242, 2022. 2
+[39] Christoph Schuhmann, Richard Vencu, Romain Beaumont,
+Robert Kaczmarczyk, Clayton Mullis, Aarush Katta, Theo
+Coombes, Jenia Jitsev, and Aran Komatsuzaki. LAION-
+400M: open dataset of clip-filtered 400 million image-text
+pairs. CoRR, abs/2111.02114, 2021. 5
+[40] Yuxiang Tuo, Wangmeng Xiang, Jun-Yan He, Yifeng Geng,
+and Xuansong Xie. Anytext: Multilingual visual text gener-
+ation and editing. arXiv, 2023. 1, 2, 3, 5, 6
+[41] Qixun Wang, Xu Bai, Haofan Wang, Zekui Qin, and An-
+thony Chen. Instantid: Zero-shot identity-preserving gener-
+ation in seconds. arXiv preprint arXiv:2401.07519 , 2024.
+2
+[42] Yukang Yang, Dongnan Gui, Yuhui Yuan, Haisong Ding,
+Han Hu, and Kai Chen. Glyphcontrol: Glyph condi-
+tional control for visual text generation. arXiv preprint ,
+abs/2305.18259, 2023. 1, 2, 3, 6
+[43] Zhenhua Yang, Dezhi Peng, Yuxin Kong, Yuyi Zhang, Cong
+Yao, and Lianwen Jin. Fontdiffuser: One-shot font genera-
+tion via denoising diffusion with multi-scale content aggre-
+gation and style contrastive learning. In Proceedings of the
+AAAI conference on artificial intelligence, 2024. 3
+[44] Hu Ye, Jun Zhang, Sibo Liu, Xiao Han, and Wei Yang. Ip-
+adapter: Text compatible image prompt adapter for text-to-
+image diffusion models. arXiv preprint, 2023. 2
+[45] Lvmin Zhang and Maneesh Agrawala. Adding conditional
+control to text-to-image diffusion models. arXiv preprint,
+abs/2302.05543, 2023. 2, 6
+[46] Lingjun Zhang, Xinyuan Chen, Yaohui Wang, Yue Lu, and
+Yu Qiao. Brush your text: Synthesize any scene text on im-
+ages via diffusion model, 2023. 2, 3
+[47] Yiming Zhao and Zhouhui Lian. Udifftext: A unified frame-
+work for high-quality text synthesis in arbitrary images via
+character-aware diffusion models, 2023. 2
+10
+
+AnyText2: Visual Text Generation and Editing With Customizable Attributes
+Supplementary Material
+A. Analysis of the Text Generation Process in
+AnyText
+In this section, we examine the text generation process in
+AnyText [40] and visualize the attention maps of its vari-
+ous cross-attention layers using the method from Prompt-
+To-Prompt [11], as shown in Fig. 6. AnyText introduces
+a Text Embedding Module that extracts text glyphs using
+an OCR model and then fuses with other image tokens and
+processes through a ControlNet-like network for text gener-
+ation. We visualized the attention maps of the text tokens in
+both U-Net and TextControlNet at three resolutions: 64x64,
+32x32, and 16x16.
+In the U-Net encoder (➀-➂), the process focuses on gen-
+erating image content without text, then in the TextControl-
+Net ( ➃-➅), it concentrates on generating text glyphs. Fi-
+nally, in the U-Net decoder ( ➆-➈), the integration of im-
+age and text is achieved. However, as shown in the lower
+part of Fig. 6, we discovered that TextControlNet also re-
+sponds significantly to non-text tokens. This indicates that
+it not only facilitates text generation but also acts as part of
+the denoiser, working in conjunction with U-Net to generate
+the overall image content. While this improves the integra-
+tion of image and text, it can also lead to drawbacks such
+as decreased overall image quality and decreased inference
+efficiency. This paper proposes the WriteNet+AttnX archi-
+tecture to address these issues.
+B. Examples of Font Extractor and Color
+Picker
+In Fig. 7, we present examples of the extracted font image
+ef and text color ec obtained using the font extractor and
+color picker. Each set contains three images: the first is the
+training image, the second is the glyph image lg used in the
+Auxiliary Latent Module, which renders each line of text
+onto an image according to their positions using a glyph
+render. For display purposes, the color ec extracted by the
+color picker is applied to render text. Note that during train-
+ing, lg does not include color information. Moreover, each
+text line is rendered using a randomly selected font to pre-
+vent the leakage of font style. This also brings the advantage
+that AnyText2 can choose any font file to generate text dur-
+ing inference, unlike AnyText, which is limited to using the
+Arial Unicode font. The font image ef in the third image
+is extracted by the font extractor. To prevent the leakage
+of glyphs, various transformations such as rotation, transla-
+tion, scaling, and occlusion are applied.
+Table 4. Comparison with AnyText on watermark probabilities.
+watermark Chinese English
+AnyText 2.9% 0.4%
+AnyText2 1.8% 0.7%
+Table 5. The Comparison of the parameter sizes of modules be-
+tween AnyText and AnyText2.
+Modules AnyText AnyText2
+UNet 859M 859M
+AttnX - 57M
+V AE 83.7M 83.7M
+CLIP Text Encoder 123M 123M
+TextControlNet/WriteNet 360M 360M
+Auxiliary Latent Module 1.3M 1.3M
+Glyph Encoder 4.6M 4.6M
+Position Encoder - 2.2M
+Font Encoder - 4.6M
+Color Encoder - 5K
+Total 1431.6M 1495.4M
+C. Prevent Watermarks Using Trigger Words
+Images containing text collected from the internet often
+come with numerous watermarks. According to Any-
+Text [40], 25% of the Chinese data and 8% of the English
+data in the AnyWord-3M dataset are watermarked. They
+adopted a strategy of removing these watermarked images
+during the last two epochs of training, amounting to about
+0.5 million images. We employed a different approach that,
+based on the watermark probability provided in AnyWord-
+3M, labeled as wm score, we added “no watermarks” to the
+captions with wm score<0.5, and “with watermarks” for
+those with higher scores. During the inference, by adding
+the trigger words “no watermarks”, watermarks can be ef-
+fectively prevented. The comparison with AnyText on wa-
+termark probabilities is shown in Table 4.
+D. Parameter Size and Computational Over-
+head of AnyText2
+Our framework is implemented based on AnyText. Despite
+the addition of some modules, the total parameter sizes have
+only increased by 63.8M, as referred to in Table 5. More-
+over, due to the design of WriteNet that only performs in-
+ference once, the computational overhead is reduced. On
+a Tesla V100, the time taken to generate 4 images in FP16
+has been reduced from 5.85s to 4.69s, resulting in a 19.8%
+improvement.
+1
+
+⊕ UNet
+❄
+an	ancient	Chinese	copper	coin	with	the	words	“康” “熙” “通” “宝”
+TextControlNet
+🔥
+𝝐𝒕
+Auxiliary Latent Module Text Embedding Module
++GlyphPosition
+𝒛𝒂
+𝒛𝒕
+𝒄𝒕𝒆
+Non-text	token’s	attention	map	in	TextControlNet：①②③
+④⑤⑥
+⑦⑧⑨
+Figure 6. Analysis of the text generation process in AnyText.
+E. Examples of Long and Short Captions
+From the examples presented in Fig. 8, it is evident that the
+short captions produced by BLIP-2 are very simplistic and
+may contain errors. In contrast, the long captions generated
+by QWen-VL not only provide a comprehensive description
+of the image details but also achieve a high level of accu-
+racy, even accurately identifying the text within the images.
+We remove the quotation marks from these long captions
+and use them for training.
+2
+
+training	imageposition & glyph	&	colorfonttraining	imageposition & glyph	&	colorfont
+Figure 7. Examples of the extracted font image and text color using the font extractor and color picker.
+A wooden barrel-shaped piggy bank with Chinese characters and illustrations of flowers is placed on a chair outside. The words "吵架⼀次罰款100" (Fine for one fight) are prominently displayed in black letters. The overall style is simple and rustic.a wooden barrel with a Japanese writing on it
+This image shows a close-up of a spring roll filled with meat and vegetables, being held up by someone's hand. The spring roll has been cut open to reveal its filling, which includes green onions and red meat. In the background, there is a wooden tray holding chopsticks and a bowl. The words "⻓假吃得好" (meaning "Long holiday eating well") are visible in the bottom right corner of the photo.a person holding a wrap with meatandvegetables
+This image is a cartoon of Tom from "Tom and Jerry". He is holding a book with both hands and has his eyes closed. The text on the picture says, "The world's mess does not concern me. In my heart, there is only reading and doing exercises."
+This image is an illustration depicting how to perform the Heimlich maneuver on a baby. It shows a cartoon woman holding a baby in her arms and demonstratingthe proper technique for clearing milk from the baby's airway. The text accompanying the image emphasizes the importance of not using forceful blows to the abdomen.
+the cat is holding a bone in Chinese
+a cartoon of a baby with a baby in its arms
+The book cover features an illustration of five clowns standing on a beach with their arms raised in the air. They are all dressed in colorful costumes and hats, and there is a sheriff's badge visible in the top left corner of the image. In the bottom right corner, there is a ticket that reads "Admit One". The overall style of the artwork is whimsical and playful.
+This is a birthday decoration set with the theme of black and gold. The main elements include a "Happy Birthday" banner, balloons in the shape of stars and numbers, as well as tassel garlands. The overall style is elegant and festive, suitable for celebrating important birthdays such as turning 70 years old.
+This is the cover of an album titled "Ultimate Classical Worship Collection". It features a blue violin with a black bow resting against it on a white background. The title of the album is prominently displayed in bold letters across the top of the image.
+This is the cover art for War of the Monsters, featuring two creatures fighting in a cityscape. One creature appears to be a robot while the other resembles a gorilla. The title "War of the Monsters" is prominently displayed at the top of the image.
+clowns on vacation
+ultimate classical worship collection
+happy birthday 70th gold and black balloons
+war of the monsters
+Figure 8. Exmaples of training images along with long and short captions by BLIP-2 and QWen-VL.
+3
+

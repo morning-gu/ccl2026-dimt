@@ -1,0 +1,8 @@
+Title: GlyphDraw: Seamlessly Rendering Text with Intricate Spatial Structures in Text-to-Image Generation
+
+Authors: Authors:Jian Ma, Mingjun Zhao, Chen Chen, Ruichen Wang, Di Niu, Haonan Lu, Xiaodong Lin
+
+ArXiv: 2303.17870
+
+Abstract:
+Recent breakthroughs in the field of language-guided image generation have yielded impressive achievements, enabling the creation of high-quality and diverse images based on user this http URL the synthesis performance is fascinating, one significant limitation of current image generation models is their insufficient ability to generate text coherently within images, particularly for complex glyph structures like Chinese characters. To address this problem, we introduce GlyphDraw, a general learning framework aiming to endow image generation models with the capacity to generate images coherently embedded with text for any specific this http URL first sophisticatedly design the image-text dataset&#39;s construction strategy, then build our model specifically on a diffusion-based image generator and carefully modify the network structure to allow the model to learn drawing language characters with the help of glyph and position this http URL, we maintain the model&#39;s open-domain image synthesis capability by preventing catastrophic forgetting by using parameter-efficient fine-tuning this http URL qualitative and quantitative experiments demonstrate that our method not only produces accurate language characters as in prompts, but also seamlessly blends the generated text into the this http URL refer to our \href{this https URL}{project page}. \end{abstract}

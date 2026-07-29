@@ -1,0 +1,23 @@
+﻿# Core dependencies
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# OCR
+rapidocr-onnxruntime>=1.3.0
+
+# Translation API
+openai>=1.0.0
+httpx>=0.24.0
+
+# Optional: Advanced OCR backends
+# paddleocr>=2.7.0
+# easyocr>=1.7.0
+
+# Optional: Advanced erasure/rendering
+# simple-lama-inpainting>=0.1.0
+# diffusers>=0.21.0
+# torch>=2.0.0
+
+# Optional: AnyText2 (clone from GitHub)
+# git+https://github.com/tyx-ch/AnyText2.git

@@ -1,0 +1,285 @@
+DIMT25@ICDAR2025: HW-TSC’s End-to-End
+Document Image Machine Translation System
+Leveraging Large Vision-Language Model
+Zhanglin Wu, Tengfei Song, Ning Xie, Weidong Zhang,
+Pengfei Li, Shuang Wu, Chong Li, Junhao Zhu, and Hao Yang
+Huawei Translation Service Center, Nanjing, China
+{wuzhanglin2, songtengfei2, nicolas.xie, zhangweidong17,
+lipengfei203, wushuang42, august.li, zhujunhao, yanghao30}@huawei.com
+Abstract. ThispaperpresentsthetechnicalsolutionproposedbyHuawei
+Translation Service Center (HW-TSC) for the "End-to-End Document
+Image Machine Translation for Complex Layouts" competition at the
+19th International Conference on Document Analysis and Recognition
+(DIMT25@ICDAR2025). Leveraging state-of-the-art open-source large
+vision-language model (LVLM), we introduce a training framework that
+combinesmulti-tasklearningwithperceptualchain-of-thoughttodevelop
+a comprehensive end-to-end document translation system. During the in-
+ference phase, we apply minimum Bayesian decoding and post-processing
+strategies to further enhance the system’s translation capabilities. Our
+solution uniquely addresses both OCR-based and OCR-free document
+image translation tasks within a unified framework. This paper system-
+atically details the training methods, inference strategies, LVLM base
+models, training data, experimental setups, and results, demonstrating
+an effective approach to document image machine translation.
+1 Introduction
+Document Image Machine Translation (DIMT) [1,2] combines text recognition
+and translation to process multilingual documents [3] like manuals, reports, and
+archives. Despite deep learning [4] advances, building an end-to-end DIMT sys-
+tem that handles diverse layouts with high accuracy remains challenging.
+To foster innovation in this field, the 19th International Conference on Doc-
+ument Analysis and Recognition (ICDAR 2025) has specifically established a
+competition titled "End-to-End Document Image Machine Translation for Com-
+plex Layouts." Addressing this challenge, our team (HW-TSC) has developed
+an innovative framework based on cutting-edge large vision-language models
+(LVLMs) [5,6]. This framework integrates multi-task learning (MTL) [7] with
+perceptual chain-of-thought [8] (PCOT) training approach, enabling the model
+to simultaneously comprehend visual layouts and linguistic content. During the
+inference phase, the system further employs minimum Bayesian (MBR) decod-
+ing [9] and post-processing strategies to optimize output quality.
+arXiv:2504.17315v1  [cs.CV]  24 Apr 2025
+
+2 Wu et al.
+The primary innovation of this study lies in unifying OCR-based and OCR-
+free translation tasks within a single framework, eliminating the need for con-
+structing independent pipelines. This design significantly enhances the system’s
+adaptability, allowing it to flexibly handle real-world scenarios where Optical
+Character Recognition (OCR) [10] may or may not be applicable. Evaluations
+on the test set confirm the method’s effectiveness in processing documents with
+complex structures.
+This paper systematically presents the complete technical solution, empha-
+sizing reproducibility and transparency. The subsequent sections elaborate in
+detail on: 1) the training methodology and inference strategies, 2) the compo-
+sition of training data and the LVLM base model, 3) experimental setups and
+results. This structured presentation facilitates a comprehensive understanding
+of our research contributions and innovations.
+2 Method Description
+2.1 T raining Method
+With the advancement of large language model (LLM) [11,12] technology, its
+three-stage training paradigm of "Continue Pre-Training (CPT) [13]–Super-
+vised Fine-Tuning (SFT) [14]–Reinforcement Learning from Human Feedback
+(RLHF) [15]" has been successfully applied to LVLMs [16,17]. This paradigm
+enables open-source LVLMs to achieve outstanding performance in cross-modal
+tasks [18]. Based on this, we propose an innovative training strategy: integrating
+MTL with PCOT to perform SFT on a state-of-the-art LVLM [6], enhancing its
+performance on DIMT25 tasks. Figure 1 illustrates the training data format.
+MTL MTL [7] is a machine learning paradigm [19] that enhances model gen-
+eralization by sharing representations across different tasks. Specifically, MTL
+concurrently optimizes multiple related tasks within a single model, capitalizing
+on latent inter-task correlations to effectively mitigate issues prevalent in tradi-
+tional single-task learning [20]—such as model overfitting or limited represen-
+tational capacity caused by data isolation. Particularly during the SFT process
+of LVLMs, MTL facilitates cross-task collaborative training through parameter-
+sharing mechanisms and joint loss function optimization. This approach not only
+strengthens the model’s ability to extract multimodal features but also markedly
+improves its robustness in semantic understanding within complex scenarios.
+PCOT Chain-of-Thought (CoT) [8] approach demonstrates significant advan-
+tages in complex cognitive tasks (such as mathematical reasoning, logical de-
+duction,andmultimodalcomprehension)bysimulatingtheprogressivereasoning
+process of humans. Compared to traditional end-to-end training paradigms, CoT
+emphasizes an explicit step-by-step reasoning mechanism, with this structured
+processing enhancing the transparency of model decision-making. To address
+the unique challenges of the DIMT25 task, we extend the standard CoT into
+
+DIMT25@ICDAR2025: HW-TSC’s System Report 3
+PCOT. It adopts a hierarchical processing pipeline: the first stage focuses on
+precise detection and recognition of textual content in images, while the second
+stage performs specialized cross-lingual transformation. This two-stage design
+effectively resolves the semantic fragmentation issue of traditional methods in
+mixed text-image scenarios. By establishing a deep coupling mechanism between
+visual perception and language understanding, it significantly improves the ac-
+curacy and consistency of translation results.
+2.2 Inference Strategy
+MBR Decoding The core objective of MBR decoding [9] is to select the
+optimal output by optimizing an expected utility function, which quantifies
+the similarity between candidate hypotheses and reference texts. Previous re-
+search [21–23] has demonstrated the effectiveness of MBR decoding in machine
+translation tasks, where automatic evaluation metrics [24,25] are typically em-
+ployed as similarity measures. We adapt this approach to the DIMT25 task.
+Specifically, we concurrently collect candidate outputs generated by two decod-
+ing strategies—including deterministic outputs from beam search and 10 di-
+verse samples produced by temperature and nucleus sampling (witht = 0.7 and
+p = 0.95). Subsequently, we compute pairwise similarity scores within the candi-
+date set using BLEU [26] and select the sample with the highest similarity score
+as the final system output.
+Post-processing The analysis of the model’s output reveals that when pro-
+cessing special symbols (such as -, ..., _, *, etc.) that appear repeatedly in
+images or content-heavy tables, the model tends to over-translate. To address
+this, we establish two simple processing rules: reducing consecutive special sym-
+bols exceeding 10 instances to 10 and removing translation outputs for overly
+complex tables. Additionally, for Chinese translation results, we implement con-
+tinuous space normalization after jieba tokenization, replacing multiple consec-
+utive spaces with a single space to make the output more aligned with human
+reading habits.
+3 Implementation Details
+3.1 T raining Data
+The DIMT25 competition’s multimodal dataset, shown in Table 2, serves as
+our data source for model training and evaluation, containing two independent
+tracks for different task scenarios.
+3.2 L VLM Base Model
+WeselectInternVL2.5-8B-MPO 1 (largemodel)andInternVL2.5-1B-MPO 2 (small
+model) as our LVLM base models in different model size segments, both of which
+1 https://huggingface.co/OpenGVLab/InternVL2_5-8B-MPO
+2 https://huggingface.co/OpenGVLab/InternVL2_5-1B-MPO
+
+4 Wu et al.
+demonstrated outstanding performance on open-source LVLM evaluation bench-
+marks like MOTBench [27], and perform SFT on them.
+4 Experimental
+4.1 Setup
+We employ the open-source InternVL framework3 to perform full-parameter fine-
+tuning on the InternVL2.5-MPO model, utilizing DeepSpeed’s zero3-offload tech-
+nique to accelerate the training process. The detailed training configuration is
+as follows: we conduct parallel training across 8 GPUs with a batch size of 4
+per GPU and a gradient accumulation step of 4. The initial learning rate is set
+to 4e-5. The maximum sequence length is configured to 8,192 tokens, and the
+model is trained for 5 epochs.
+4.2 Result
+Table 1 presents three key findings: (1) Compared to single-task direct SFT, the
+MTL-PCOT combined SFT method demonstrates more significant performance
+improvement for LVLM on the DIMT25 task; (2) MBR and post-processing
+inference strategies offer complementary performance enhancements; (3) Model
+capability scales with parameter size, with larger models outperforming smaller
+counterparts when using identical methodologies.
+T able 1.BLEU scores for each fine-grained DIMT25 sub-track
+Model track1 track2
+Valid-OCR Valid-MT Test-OCR Test-MT Valid-MT Test-MT
+InternVL2.5-1B-MPO Zero-Shot / / / / / /
+InternVL2.5-1B-MPO SFT / 67.21 / / 59.81 /
+InternVL2.5-1B-MPO MTL-PCOT SFT / 70.81 94.63 62.16 62.17 57.35
++ MBR / / 96.50 64.08 / 59.06
++ Post-processing / / 97.00 66.16 / 59.56
+InternVL2.5-8B-MPO Zero-Shot / 30.71 / / 29.53 /
+InternVL2.5-8B-MPO SFT / 72.74 / / 64.24 /
+InternVL2.5-8B-MPO MTL-PCOT SFT / 75.72 94.89 65.32 65.77 58.57
++ MBR / / 97.16 68.26 / 60.33
++ Post-processing / / 97.66 70.48 / 60.78
+Compliance Statement:
+Our team confirms that all data used complies with the competition rules and
+relevant data privacy, copyright, and ethical standards.
+3 https://github.com/OpenGVLab/InternVL
+
+DIMT25@ICDAR2025: HW-TSC’s System Report 5
+References
+1. Zhang Z, Zhang Y, Liang Y, et al. LayoutDIT: Layout-aware end-to-end document
+image translation with multi-step conductive decoder[C]//Findings of the Associa-
+tion for Computational Linguistics: EMNLP 2023. 2023: 10043-10053.
+2. Liang Y, Zhang Y, Ma C, et al. Document image machine translation with dynamic
+multi-pre-trained models assembling[C]//Proceedings of the 2024 Conference of the
+North American Chapter of the Association for Computational Linguistics: Human
+Language Technologies (Volume 1: Long Papers). 2024: 7084-7095.
+3. Thendral, R., et al. "Document Image Analysis for Text Extraction and Trans-
+lation." 2023 4th International Conference on Intelligent Technologies (CONIT).
+IEEE, 2024.
+4. LeCun, Yann, Yoshua Bengio, and Geoffrey Hinton. "Deep learning." nature
+521.7553 (2015): 436-444.
+5. Chen, Zhe, et al. "Expanding performance boundaries of open-source multimodal
+models with model, data, and test-time scaling." arXiv preprint arXiv:2412.05271
+(2024).
+6. Wang, Weiyun, et al. "Enhancing the reasoning ability of multimodal large language
+models via mixed preference optimization." arXiv preprint arXiv:2411.10442 (2024).
+7. Zhang, Yu, and Qiang Yang. "A survey on multi-task learning." IEEE transactions
+on knowledge and data engineering 34.12 (2021): 5586-5609.
+8. Wei, Jason, et al. "Chain-of-thought prompting elicits reasoning in large language
+models." Advances in neural information processing systems 35 (2022): 24824-24837.
+9. Farinhas, António, José GC de Souza, and André FT Martins. "An empirical study
+of translation hypothesis ensembling with large language models." arXiv preprint
+arXiv:2310.11430 (2023).
+10. Mithe, Ravina, Supriya Indalkar, and Nilam Divekar. "Optical character recogni-
+tion."Internationaljournalofrecenttechnologyandengineering(IJRTE)2.1(2013):
+72-75.
+11. Chang, Yupeng, et al. "A survey on evaluation of large language models." ACM
+transactions on intelligent systems and technology 15.3 (2024): 1-45.
+12. Kasneci, Enkelejda, et al. "ChatGPT for good? On opportunities and challenges
+of large language models for education." Learning and individual differences 103
+(2023): 102274.
+13. Gupta, Kshitij, et al. "Continual pre-training of large language models: How to
+(re) warm your model?." arXiv preprint arXiv:2308.04014 (2023).
+14. Dong, Guanting, et al. "How abilities in large language models are affected by
+supervised fine-tuning data composition." arXiv preprint arXiv:2310.05492 (2023).
+15. Bai, Yuntao, et al. "Training a helpful and harmless assistant with reinforcement
+learning from human feedback." arXiv preprint arXiv:2204.05862 (2022).
+16. Bai, Shuai, et al. "Qwen2. 5-vl technical report." arXiv preprint arXiv:2502.13923
+(2025).
+17. Team, Gemini, et al. "Gemini: a family of highly capable multimodal models."
+arXiv preprint arXiv:2312.11805 (2023).
+18. Shin, Andrew, Masato Ishii, and Takuya Narihira. "Perspectives and prospects on
+transformer architecture for cross-modal tasks with language and vision." Interna-
+tional journal of computer vision 130.2 (2022): 435-454.
+19. Lampropoulos, Aristomenis S., and George A. Tsihrintzis. "Machine learning
+paradigms." Applications in recommender systems. Switzerland: Springer Interna-
+tional Publishing (2015).
+
+6 Wu et al.
+20. Marquet, Thomas, and Elisabeth Oswald. "A comparison of multi-task learning
+and single-task learning approaches." International Conference on Applied Cryp-
+tography and Network Security. Cham: Springer Nature Switzerland, 2023.
+21. Wu, Zhanglin, et al. "HW-TSC’s Submission to the CCMT 2024 Machine Transla-
+tion Tasks." China Conference on Machine Translation. Singapore: Springer Nature
+Singapore, 2024.
+22. Wu,Zhanglin,etal."ChoosetheFinalTranslationfromNMTandLLMhypotheses
+Using MBR Decoding: HW-TSC’s Submission to the WMT24 General MT Shared
+Task." arXiv preprint arXiv:2409.14800 (2024).
+23. Wu,Zhanglin,etal."ImprovingtheQualityofIWLST2024CascadeOfflineSpeech
+Translation and Speech-to-Speech Translation via Translation Hypothesis Ensem-
+bling with NMT models and Large Language Models." Proceedings of the 21st
+International Conference on Spoken Language Translation (IWSLT 2024). 2024.
+24. Rei, Ricardo, et al. "COMET: A Neural Framework for MT Evaluation." Proceed-
+ings of the 2020 Conference on Empirical Methods in Natural Language Processing
+(EMNLP). 2020.
+25. Rei, Ricardo, et al. "COMET-22: Unbabel-IST 2022 submission for the met-
+rics shared task." Proceedings of the Seventh Conference on Machine Translation
+(WMT). 2022.
+26. Papineni, Kishore, et al. "Bleu: a method for automatic evaluation of machine
+translation." Proceedings of the 40th annual meeting of the Association for Com-
+putational Linguistics. 2002.
+27. Wu, Zhanglin, et al. "Evaluating Menu OCR and Translation: A Benchmark for
+Aligning Human and Automated Evaluations in Large Vision-Language Models"
+arXiv preprint arXiv:2504.13945 (2025).
+
+DIMT25@ICDAR2025: HW-TSC’s System Report 7
+A Training Data Format
+<image>\nYour task is to
+analyze the provided English
+image and its corresponding
+unsorted OCR result, then
+generate a sorted OCR result
+and its Chinese translation.
+{unsorted_OCR_result}: 
+Event history\nCASE STUDY
+DETAILS XYZ SCHEME
+QUESTION\n ......
+{sorted_OCR_result}: 
+CASE STUDY DETAILS XYZ
+SCHEME QUESTION\n
+Event history\n .....
+{Chinese_translation_result}: 
+案例研究详细信息方案问题 \n
+事件历史 \n......
+TASK1:
+TASK2:
+<image>\nYour task is to
+analyze the provided English
+image, extract the text using
+OCR, and generate both the
+OCR result and its Chinese
+translation in Markdown
+format.
+{OCR_result}:
+# Exploring Wedges of an
+Oriented Grid\n\nby an
+Automaton with Pebbles\n ......
+{Chinese_translation_result}:
+# 探索定向网格的楔形 \n\n 由
+带有卵石的自动机 \n......
+Prompt1 Output1Image1
+PCOT
+Image2 Prompt2 Output2
+MTL
+Fig. 1. Training Data Organization Structure for Our Method.
+B Training Data Size
+T able 2.Statistical Information of the DIMT25 Training Data
+T rack Dataset # of Examples
+T rain V alid T est
+T rack 1 DIMT-W ebDoc-300K 300K 1K 1K
+T rack 2 DIMT-arXiv-124K 124K 1K 1K
+

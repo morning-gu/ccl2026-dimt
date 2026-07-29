@@ -1,0 +1,811 @@
+Ensuring Consistency for In-Image Translation
+Chengpeng Fu ∗†, Xiaocheng Feng ∗†, Yichong Huang ∗, Wenshuai Huo ∗†, Baohang Li ∗, Zhirui Zhang, Yunfei Lu,
+Dandan Tu, Duyu Tang, Hui Wang †, Bing Qin ∗†, Ting Liu ∗†
+∗ Harbin Institute of Technology, Harbin, China. {cpfu, xcfeng, ychuang, wshuo, qinb, tliu }@ir.hit.edu.cn
+† Pengcheng Laboratory, Shenzhen, China. wangh06@pcl.ac.cn
+Abstract—The in-image machine translation task involves
+translating text embedded within images, with the translated
+results presented in image format. While this task has numerous
+applications in various scenarios such as film poster translation
+and everyday scene image translation, existing methods fre-
+quently neglect the aspect of consistency throughout this process.
+We propose the need to uphold two types of consistency in this
+task: translation consistency and image generation consistency.
+The former entails incorporating image information during trans-
+lation, while the latter involves maintaining consistency between
+the style of the text-image and the original image, ensuring
+background integrity. To address these consistency requirements,
+we introduce a novel two-stage framework named HCIIT (High-
+Consistency In-Image Translation) which involves text-image
+translation using a multimodal multilingual large language model
+in the first stage and image backfilling with a diffusion model in
+the second stage. Chain of thought learning is utilized in the first
+stage to enhance the model’s ability to leverage image information
+during translation. Subsequently, a diffusion model trained for
+style-consistent text-image generation ensures uniformity in text
+style within images and preserves background details. A dataset
+comprising 400,000 style-consistent pseudo text-image pairs is
+curated for model training. Results obtained on both curated
+test sets and authentic image test sets validate the effectiveness
+of our framework in ensuring consistency and producing high-
+quality translated images.
+Index Terms —multi-modal machine translation, in-image
+translation, diffusion model
+I. I NTRODUCTION
+With globalization on the rise, the demand for machine
+translation in our lives is increasing significantly. Beyond con-
+ventional text translation, we frequently encounter instances
+where text embedded within images requires translation, span-
+ning from movie posters and children’s picture books to
+various everyday situations. Currently, research focused on
+translating text within images, such as Text Image Translation
+(TIT) [1], [2], aims to precisely convert text from source
+images into the desired target text, rather than integrating
+the translated text back onto the source images. However, in
+practical scenarios, there is an increasing demand to display
+the translated text in image form to offer a more intuitive
+representation. We refer to this task of rendering text back
+onto images as In-Image Translation (IIT) in this work.
+Commercial systems such as Google and Aliyun typically
+present results in image format, focusing primarily on transla-
+tions for everyday practical scenarios. In these scenarios, the
+emphasis lies on conveying the placement and significance of
+the translated text within the image, rather than prioritizing the
+visual smoothness of the rendered image. [3] have proposed
+HCIIT
+Translate
+Translation
+Consistency
+Image
+Generation
+Consistency
+Introducing
+Image
+Information in
+Translation
+Fluency of
+Background
+Font style
+consistency
+Anytrans
+Google Trans
+Source Image
+Fig. 1. Comparison of the performance of our method, Anytrans and
+online systems in terms of translation consistency and image generation
+consistency. ”Transfer” in the image should be translated as ” 中转” (transfer
+station/transit) not ” 转移/转换” (convert/shift). The style of the target image
+should be consistent with the source image. More examples can be find in
+Figure 4.
+the AnyTrans framework to improve the fluency of translated
+images. However, all these approaches overlook the consis-
+tency assurance in the process of IIT. We emphasize that in
+conducting IIT, the following consistencies should be ensured
+to meet the requirements of most scenarios:
+• Translation Consistency: Image information should be
+integrated into the translation process. While previous
+studies on multimodal machine translation [4]–[8] have
+primarily focused on enhancing text translation quality
+by leveraging image information during the text trans-
+lation process, text translation accompanied by images
+is relatively uncommon in real-life scenarios. In IIT,
+text is always accompanied by image, making image
+information particularly crucial during the translation
+process.
+• Image Generation Consistency: In certain scenarios such
+as film poster translation and children’s picture book
+translation, we aim for the style of the target text to be
+consistent with that of the source text. This consistency
+includes aspects like font and color consistency in the text
+images, as well as minimal alteration to the background.
+Existing methods like Anytrans determine the style of the
+generated text image based on the surrounding context of
+the rendered image. A more appropriate approach would
+be to ensure consistency with the style of the input source
+text image.
+As shown in Figure 1, the existing methods are unable to
+arXiv:2412.18139v1  [cs.CL]  24 Dec 2024
+
+fully meet these consistency rules, so we further propose a
+two-stage framework for IIT called HCIIT: (1) TIT based on
+a Multimodal Multilingual Large Language Model(MMLLM):
+In this stage, we leverage Chain of Thought (CoT) learning to
+ensure effective utilization of image information during the
+translation process, thereby enhancing translation accuracy.
+(2) Translation Result Backfilling using Diffusion Model: In
+this stage, we use a diffusion model to generate images,
+which can produce high-quality images, ensuring background
+smoothness. However, existing diffusion models still have
+certain issues in text-image generation and struggle to generate
+stylistically consistent text images. Therefore, we introduce
+a style latent module to the existing text-control diffusion
+model to enhance the quality of text images and learn styles
+effectively. Additionally, since real translation image pairs are
+scarce in real-life settings, we generate synthetic data with
+different styles (including various fonts, text sizes, colors, and
+italicization) for style consistency learning. By evaluating our
+method on both synthetic test sets and real image test sets, we
+observed superior translation performance and improved style
+consistency compared to previous commercial systems and
+methods. In essence, our work presents two key contributions:
+• We underline current inadequacies in maintaining con-
+sistency in in-image translation tasks, with a specific em-
+phasis on ensuring consistency in translation and image
+generation. We also propose a framework to enhance
+these consistencies.
+• We have curated over 400,000 style-consistent pseudo-
+parallel image pairs and trained a model capable of
+generating image-with-text content in a consistent style.
+Our framework has yielded satisfactory and acceptable
+results in ensuring consistent.
+II. R ELATED WORK
+A. In-Image Translation
+Text Image Translation (TIT) [1], [2], [9], [10], which is a
+subtask of IIT, aims to translate text on images into the target
+language, primarily returning the translation in textual form.
+For returning translation results in image form, AnyTrans pro-
+posed utilizing a MMLLM for translation, and then employing
+Anytext to render the text onto images. However, it did not
+focus on integrating image information during translation, and
+it also did not maintain consistent text styles. Our framework
+addresses these limitations. Current methods for IIT still rely
+on cascaded approaches, while some have proposed a method
+like Translatotron-V [11] to achieve end-to-end translation,
+primarily for text images with easy and solid backgrounds.
+A crucial future challenge is how to achieve high-quality end-
+to-end translation for complex text images in natural scenes
+with intricate backgrounds.
+B. Text Image Generation
+In our framework, we utilize text-to-image diffusion models
+to generate target images. However, existing methods often
+struggle to produce high-quality text images. Several efforts
+have been made to enhance the text generation capabilities of
+diffusion models: GlyphDraw [12] introduces glyph images
+as conditions to improve text image generation. GlyphControl
+[13] further incorporates text position and size information.
+TextDiffuser [14] constructs a layout network to extract char-
+acter layout information from the text prompt, generating
+a character-level segmentation mask as a control condition.
+TextDiffuser-2 [15] builds upon TextDiffuser by unleashing
+the power of language models for text rendering. Anytext [16]
+transforms the text encoder through the integration of semantic
+and glyph information. Additionally, it incorporates an OCR
+encoder to supervise text generation at a more granular level.
+All of these methods mentioned so far struggle to generate
+stylistically consistent images. Building upon Anytext, we fur-
+ther modified the framework by incorporating a style module
+to ensure the consistency of text styles in the generated images.
+III. M ETHODOLOGY
+In this section, we will initially present our two-stage frame-
+work, designed to ensure consistency in IIT. Subsequently, we
+will provide detailed explanations of the methods employed
+in each of the two stages.
+A. High-Consistent In-Image Translation Framework
+We propose a two-stage methodology to ensure high consis-
+tency in IIT, as depicted in Figure 2: (1) Text image translation
+based on a MMLLM. For a source image S, the initial step
+involves text position recognition, which yields N pieces of
+information regarding the locations of text elements. These
+details are presented in the form of text boxes and denoted as
+P = {pi}N
+i=1. Next, we will individually feed source image
+S and the position of each text element pi into a MMLLM
+to accomplish text recognition and translation, resulting in the
+translated output Y = {yi}N
+i=1. This large language model
+must support the source and target languages involved in
+our translation process. (2) Image backfilling using a stable
+diffusion model. In this stage, we utilize a diffusion model to
+generate an image T containing the translated text Y while
+maintaining the style consistent with S. We transition the
+outputs from the first stage to the four inputs of the second
+stage: 1) For each translated text yi in Y , we create an image
+Gi rendered in a standard font. 2) Simultaneously, based on yi,
+we generate a prompt yp
+i through rules to guide the diffusion
+model in generating the corresponding image. 3) Using the
+positional information Pi, we extract text from the image to
+obtain image bounding box Sp
+i . 4) Additionally, we remove
+the text in Sp
+i to derive the background image Sb
+i , and then
+utilize this information to generate images T p
+i corresponding
+to yi and Sp
+i . Finally, we fill in these T p
+i using position Pi to
+obtain the ultimate translated target image T .
+B. Stage 1: TIT based on MMLLM.
+The first stage focuses on text recognition and translation on
+images using a MMLLM. We employ this model to accom-
+plish the task, leveraging its advanced image understanding
+capabilities. However, we observed that when applied to image
+translation, these models tend to produce literal translations.
+
+Multi-modal Multilingual Large Language Model
+Text Position
+Detection Model
+Step 1: Recognize and Translate
+Please recognize the [SRC LANGUAGE] text within the black box in the image
+and translate it into [TGT LANGUAGE].
+Step 2: Provide a Description
+Please provide a detailed description of the information in the image.
+Step 3: Correct the recognition result
+Determine if there are any spelling errors or semantic inconsistencies in the
+identified text. If present, please rectify or remove them based on the preceding
+image information.
+Step 4: Correct the Translation result
+Pay attention to any instances of polysemy in the translated text. If there are
+potential issues with polysemy, disambiguate based on the information
+provided in the image. Avoid excessive explanations and  provide the most
+likely translation results directly.
+河岸
+ A picture containing [Tgt Language],
+captions shown in the snapshot are "河岸".
+Text Generation Enhancement Diffusion Model
+河岸
+Text Erase Model
+Stage-1 TIT based on MMLLM 
+ Stage-2 Image Backfilling based on Diffusion Model
+Glyph Render
+Fig. 2. The process of two-stage in-image translation with consistent style. Our framework consists of two stages, comprising an MMLLM-based TIT and a
+diffusion-model-based image backfilling.
+For instance, when confronted with the word ”Bank” in this
+image in Figure 2, a direct translation would yield ” 银行”
+(financial institution). However, a more accurate translation
+in the context of the image would be ” 河岸” (riverbank).
+Therefore, while MMLLMs excel at image comprehension,
+they struggle to effectively incorporate image information for
+accurate translation. [17] also noted the misalignment between
+general comprehension abilities and translation comprehension
+abilities of large language models. To address this limitation
+in our framework, we adopt a CoT learning approach which
+forces the model to generate the most probable translation
+results based on its understanding of the image. The specific
+prompts we employed are illustrated in figure 2.
+C. Stage 2:Image Backfilling based on Diffusion Model.
+In the second stage, we employ a diffusion model with text
+generation enhancement to complete the translation results as
+shown in figure 3. The current state of diffusion models can
+generate high-quality images based on descriptions, but their
+performance in images with text generation is not satisfactory.
+Some research has focused on improving the quality of the
+image with text generation, but in the context of IIT, these
+efforts still do not fully meet the requirements, which include
+maintaining style consistency and background fluency. There-
+fore, we propose a diffusion model that can generate images
+with consistent text style while preserving the background as
+much as possible.
+a) Style Latent Module: If we have pairs of stylistically
+consistent images, we can input the target image T along with
+its corresponding style image S as conditions into the text-
+controlled diffusion process, enabling the model to reference
+the style of the text in the style image while generating the im-
+age. However, in real-life scenarios, it is rare to have such pairs
+of images that are both stylistically and background-consistent,
+making the collection of genuine images a costly endeavor.
+Therefore, we resort to fabricating pairs of style-consistent
+images to facilitate training, a method we will elaborate on in
+the experimental section. Additionally, to maintain background
+consistency as much as possible, we eliminate text from the
+style image S to obtain pure background information B, which
+is then fed into the model. We employ a V AE decoder D for
+downsampling both the style image S and the background
+image B, followed by a convolutional fusion layer g to merge
+these representations and obtain Zs:
+Zs = g(D(S) +D(B))
+b) Glyph Latent Module: Consistent with Anytext, we
+also adopt three auxiliary conditions: glyph lg, position lp, and
+masked image lm and employ several stacked convolutional
+layers to construct mapping layers G and P for downsampling
+glyph lg and position lp, utilize a V AE decoder D for down-
+sampling masked image lm, and then integrate this information
+using a convolutional fusion layer f to obtain Za:
+Za = f (G(lg) +P (lp) +D(lm))
+c) Text-control Diffusion Pipeline: Upon completing the
+preparation of the style-background information auxiliary
+module and the text generation auxiliary module, we inte-
+grate them as conditions into the text-controlled diffusion
+pipeline. For an image T ∈ RH×W ×3, we encode it using a
+Variational Autoencoder(V AE) to obtain latent space feature
+Tl ∈ Rh×w×c. Consistent with the diffusion model, we
+incrementally add randomly generated Gaussian noise ϵ to Tl
+at each time step t, creating a noisy latent image Tt. Using
+the representations of the style-background auxiliary module
+Zs and the text generation auxiliary module Za as conditions,
+along with the prompt P and time step t, the text control
+diffusion model uses a network ϵθ to predict noise. The text-
+control diffusion loss is:
+Ld = ETl,Zs,Za,P,t∼N (0,1)[∥ϵ − ϵθ(Tt, Zs, Za, P, t)∥2
+2]
+
+VAE
+VAE
+河岸
+Glyph
+Block
+Glyph
+ Position
+ Masked 
+Image
+Glyph Latent Module
+Position
+Block
+ VAE
+VAE
+ VAE
+Style
+Image
+Background
+Image
+Text
+Erase
+Model
+Style Latent Module
+Fuse Layer-1
+Fuse Layer-2
+UNet
++
++
+Text
+Control
+Net
+ A picture containing [Tgt
+Language], captions shown in
+the snapshot are "河岸".
+Text Encoder
+Time
+Step
+OCR Encoder
+ OCR Encoder
+Prompt
+-
+Perceptual Loss
+Text Processing Module
+ L  
+d
+ L  
+p
+ l  
+g
+  l  
+p
+  l  
+m
+ T
+  T∗
+ S
+  B
+ P
+ T  
+l
+ Tt
+ T  
+t
+ Z  
+a
+ Z  
+s
+ t
+ T
+ ϵ  
+t
+ T  
+p∗
+ T  
+p
+Fig. 3. An overview of stage 2. We incorporated a style latent module as a constraint for the Text ControlNet.
+We also use a text perceptual loss Lp used in Anytext to fur-
+ther improve the accuracy of text generation. By incorporating
+the Lp, the model can place greater emphasis on the accurate
+generation of characters. The final loss L is expressed as:
+L = Ld + λ ∗ Lp
+λ is used to adjust the weight between two loss functions.
+IV. E XPERIMENTS
+In this section, we will progressively introduce the experi-
+mental dataset, settings, baselines, and the results.
+A. Datasets
+In the second stage, we need to construct pseudo image
+pairs to complete the experiment. Building upon text synthesis
+technology, we create stylistically consistent cross-lingual text.
+To ensure style diversity, we incorporate more than 20 font
+styles and randomly select text colors, sizes, deformations,
+and other attributes during text generation. For backgrounds,
+we randomly crop images to use as backgrounds. As for text
+content, to resemble real images more closely, we choose
+parallel corpora from the dataset of the TIT task. We conduct
+experiments on English to French (En-Fr) and English to
+Chinese (En-Zh) directions. We generate 100,000 pairs of
+parallel images for training and 200 pairs for testing in each
+of the four directions.
+To test the effectiveness of our first stage in integrating
+image information during translation, we have chosen the
+CoMMuTE [18] dataset for evaluation. This dataset is specif-
+ically designed to address ambiguity in text translation by
+incorporating images. We also extract a few real images from
+the OCRMT30K dataset and generate a few images utilizing
+by text-to-image tool for testing purposes.
+Method BLEU COMET
+Original Our Method Original Our Method
+En-De 16.04 17.31 72.56 73.84
+En-Fr 19.06 20.18 72.80 75.23
+En-Zh 18.88 19.65 80.51 81.56
+TABLE I
+TRANSLATION RESULTS ON EN-FR, E N-DE, E N-Z H DIRECTIONS OF
+COMM UTE D ATASETS .
+B. Baselines and Settings
+We compared our method with existing online systems
+and Anytrans. Anytrans is a two-stage framework for text
+translation on images that does not require training. It
+utilizes MMLLM for translation and employs AnyTrans
+for backfilling. For online systems, we selected industry-
+leading Google Image Translate(GoogleTrans), Alibaba Cloud
+Image Translate(AliyunTrans) and Youdao Image Transla-
+tion(YoudaoTrans) for comparison.
+We utilize Qwen-VL-Chat model, a MMLLM known for
+its strong capabilities in many languages, as well as its robust
+multimodal abilities. All experiments are conducted on 4 V100
+GPUs. In the second stage, our experimental setup involved
+a learning rate of 2e-5, a batch size of 6, and training for 15
+epochs. We set the parameter λ in the loss function to 0.01,
+consistent with Anytext.
+For evaluation metrics, we use the BLEU [19] and the
+COMET [20] to evaluate the results of machine translation. On
+the constructed test set with target images, we utilize image
+similarity metrics such as SSIM [21] and L1 distance. We also
+employ evaluation methods involving multimodal large models
+and human assessments.
+
+Source Image
+Google Trans
+Anytrans
+Aliyun Trans
+Our Method
+Source Image
+Target Image
+Our Method
+（a）
+（b）
+Fig. 4. Case study on En-Zh in-image translation on (a) constructed
+images and (b) real images with our method, AnyTrans, GoogleTrans and
+AliyunTrans.
+Language Aliyun
+Trans
+Youdao
+Trans Anytrans HCIIT
+SSIM
+En-Zh 0.605 0.516 0.381 0.744
+Zh-En 0.657 0.622 0.439 0.685
+En-Fr 0.581 0.486 0.356 0.668
+Fr-En - 0.467 0.281 0.675
+L1
+En-Zh 0.436 0.561 0.561 0.402
+Zh-En 0.363 0.418 0.418 0.399
+En-Fr 0.476 0.588 0.588 0.445
+Fr-En - 0.625 0.625 0.467
+TABLE II
+OUR APPROACH , ANYTRANS , AND SEVERAL ONLINE SYSTEMS ’ RESULTS
+ON THE SYNTHESIS PARALLEL CORPUS DATASET . A LIYUN TRANS DON ’T
+SUPPORT FR-E N TRANSLATION DIRECTION .
+C. Results and Analysis
+a) Translation Results: We present the results of TIT
+in Table I and juxtapose them with the initial phase of
+Anytrans (the most effective method for the current TIT task. ).
+Anytrans predominantly employs a few-shot learning approach
+(’Original’ in Table I), utilizing a large-scale language model
+to accomplish translation, potentially overlooking the signifi-
+cance of image data. In contrast, our methodology accentuates
+the amalgamation of image data during the translation process,
+obviating the need for additional training to seamlessly incor-
+porate image information. Our experimentation conducted on
+the CoMMuTE dataset, utilizing the Qwen-VL-Chat model
+as the foundational model, demonstrates superior translation
+efficacy. The results underscore our method’s ability to lever-
+age image data to resolve ambiguities effectively, thereby
+validating the efficacy of our approach.
+b) Results on Synthesis Test Sets: To assess the style
+consistency of generated images, we construct a pseudo test set
+for evaluation. We conduct tests in four directions across two
+language pairs: English-French, English-Chinese. As shown in
+Table 2, we test the effectiveness of our method and existing
+methods on this dataset, comparing it with online systems
+such as AliyunTrans, YoudaoTrans 1, and recent methods like
+Anytrans. Within the fabricated dataset, due to the presence
+of our curated reference images, we can gauge the textual
+style consistency to some extent by evaluating the image
+similarity between the generated images and the designated
+reference images. As shown in Table II, it is observed that the
+performance of Anytrans is subpar, possibly due to Anytrans
+predominantly relying on Anytext, which may not perform
+well when generating text images with large text regions in
+our synthesis datasets. Our model is trained specifically on this
+type of data, resulting in superior performance. In comparison
+to online systems, our method also yield favorable results. This
+is because these systems do not consider style consistency
+during translation, leading to lower image similarity. Some
+examples can be find in figure 4(a).
+c) Case Study: We also apply our method to real
+datasets. As shown in Figure 4(b), we present the results
+of En-Zh translation, comparing them with Google Trans-
+late, Anytrans, and Aliyun Translate. In terms of translation
+consistency, it was observed that other methods exhibit some
+discrepancies. For instance, translating ”Hot” in example as
+”热的” (scorching) instead of the correct ” 辣的” (spicy).
+Anytrans shows improvements compared to online systems as
+it uses text features during translation, but doesn’t emphasize
+the integration of image information. In contrast, our method
+demonstrates stronger integration of image context during
+translation.
+Regarding text image generation consistency, it is apparent
+that commercial online systems tend to remove the original
+text from the image and render the new text in a standard font,
+leading to incoherence between the text and the background.
+AliyunTrans sometimes doesn’t translate the text, possibly
+due to failed OCR. Although AnyTrans generally maintains
+relatively consistent backgrounds, its performance in text
+style consistency can sometimes be poor. This is because it
+fills text based on image background information, which can
+sometimes introduce additional elements. Our method demon-
+strates superior performance in text-image style consistency
+while sometimes the coherence of the background may be
+compromised.
+d) Human Evaluation and Large Language Model Eval-
+uation: We also randomly select 40 images from real and
+1We don’t compare our method with GoogleTrans as they do not offer
+an official image translation API. GoogleTrans also falls short in terms of
+consistency, as demonstrated in the case study.
+
+1.55 
+1.43 
+1.45 
+1.85 
+1.90 
+2.15 
+1.40 
+1.48 
+1.75 
+1.73 
+1.90 
+2.15 
+1.85 
+2.35 
+2.25 
+2.08 
+2.28 
+2.20 
+2.55 
+2.40 
+2.35 
+2.45 
+2.25 
+2.30 
+Font Style ConsistencyBackground coherenceTranslation accuracyFont Style ConsistencyBackground coherenceTranslation accuracyHuman EvaluationLarge Language Model Evaluation
+AliyunTransYouDaoTransAnytransHCIIT
+Fig. 5. Human evaluation and large language model evaluation.
+fabricated datasets for manual assessment and evaluation using
+GPT-4o. Our evaluation metrics comprised three components:
+translation accuracy, background coherence, and font style
+consistency. Each metric have three levels, with higher scores
+indicating better performance in that aspect. As depicted in
+Figure 5, the diffusion-based methods exhibit good back-
+ground coherence, yet it still encounters some instances of
+generation failures. On the other hand, commercial systems
+demonstrate weak background coherence but maintain a level
+of stability. Both manual and large model evaluations con-
+sistently demonstrate favorable results for our method, show-
+casing higher translation accuracy and relatively better style
+consistency.
+V. C ONCLUSION AND FUTURE WORK
+In this work, we highlight the existing deficiencies in ad-
+dressing consistency within in-image translation tasks, specif-
+ically focusing on translation consistency and image gener-
+ation consistency. To enhance these aspects of consistency,
+we propose a two-stage framework comprising text image
+translation based on MMLLM and image backfilling based on
+diffusion model. In the first stage, we incorporate CoT learning
+to improve translation consistency, while in the second stage,
+we curate a dataset of over 400,000 parallel corpora pairs to
+train a diffusion model capable of generating text images with
+consistent styles. This approach enhances the style consis-
+tency and background coherence when generating image texts.
+Ultimately, our framework yields promising results on both
+constructed and real image test sets, underscoring its efficacy.
+In the future, we will further progress in image translation
+from the following perspectives: one is enhancing the layout
+and other details of text within images, while the other involves
+researching end-to-end methods.
+REFERENCES
+[1] Cong Ma, Yaping Zhang, Mei Tu, Xu Han, Linghui Wu, Yang Zhao,
+and Yu Zhou, “Improving end-to-end text image translation from the
+auxiliary text translation task,” in 2022 26th International Conference
+on Pattern Recognition (ICPR) . IEEE, 2022, pp. 1664–1670.
+[2] Zhibin Lan, Jiawei Yu, Xiang Li, Wen Zhang, Jian Luan, Bin Wang,
+Degen Huang, and Jinsong Su, “Exploring better text image translation
+with multimodal codebook,” in Proceedings of the 61st Annual Meeting
+of the Association for Computational Linguistics (Volume 1: Long
+Papers), 2023, pp. 3479–3491.
+[3] Zhipeng Qian, Pei Zhang, Baosong Yang, Kai Fan, Yiwei Ma, Derek F.
+Wong, Xiaoshuai Sun, and Rongrong Ji, “AnyTrans: Translate AnyText
+in the image with large scale models,” in Findings of the Association for
+Computational Linguistics: EMNLP 2024 , Nov. 2024, pp. 2432–2444.
+[4] Ozan Caglayan, Lo ¨ıc Barrault, and Fethi Bougares, “Multimodal atten-
+tion for neural machine translation,” arXiv preprint arXiv:1609.03976 ,
+2016.
+[5] Shaowei Yao and Xiaojun Wan, “Multimodal transformer for multimodal
+machine translation,” in Proceedings of the 58th annual meeting of the
+association for computational linguistics , 2020, pp. 4346–4350.
+[6] Yongjing Yin, Fandong Meng, Jinsong Su, Chulun Zhou, Zhengyuan
+Yang, Jie Zhou, and Jiebo Luo, “A novel graph-based multi-modal
+fusion encoder for neural machine translation,” in Proceedings of the
+58th Annual Meeting of the Association for Computational Linguistics ,
+2020, pp. 3025–3035.
+[7] Ozan Caglayan, Menekse Kuyu, Mustafa Sercan Amac, Pranava Swa-
+roop Madhyastha, Erkut Erdem, Aykut Erdem, and Lucia Specia,
+“Cross-lingual visual pre-training for multimodal machine translation,”
+in Proceedings of the 16th Conference of the European Chapter of
+the Association for Computational Linguistics: Main Volume , 2021, pp.
+1317–1324.
+[8] Bei Li, Chuanhao Lv, Zefan Zhou, Tao Zhou, Tong Xiao, Anxiang Ma,
+and Jingbo Zhu, “On vision features in multimodal machine translation,”
+in Proceedings of the 60th Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers) , 2022, pp. 6327–
+6337.
+[9] Yasuhiko Watanabe, Yoshihiro Okada, Yeun-Bae Kim, and Tetsuya
+Takeda, “Translation camera,” in Proceedings. Fourteenth International
+Conference on Pattern Recognition (Cat. No. 98EX170) . IEEE, 1998,
+vol. 1, pp. 613–617.
+[10] Jinying Chen, Huaigu Cao, and Premkumar Natarajan, “Integrating
+natural language processing with image document analysis: what we
+learned from two real-world applications,” International Journal on
+Document Analysis and Recognition (IJDAR) , vol. 18, pp. 235–247,
+2015.
+[11] Zhibin Lan, Liqiang Niu, Fandong Meng, Jie Zhou, Min Zhang, and
+Jinsong Su, “Translatotron-v (ison): An end-to-end model for in-image
+machine translation,” arXiv preprint arXiv:2407.02894 , 2024.
+[12] Jian Ma, Mingjun Zhao, Chen Chen, Ruichen Wang, Di Niu, Haonan Lu,
+and Xiaodong Lin, “Glyphdraw: Learning to draw chinese characters in
+image synthesis models coherently,” arXiv preprint arXiv:2303.17870 ,
+vol. 2, 2023.
+[13] Yukang Yang, Dongnan Gui, Yuhui Yuan, Weicong Liang, Haisong
+Ding, Han Hu, and Kai Chen, “Glyphcontrol: Glyph conditional control
+for visual text generation,” Advances in Neural Information Processing
+Systems, vol. 36, 2024.
+[14] Jingye Chen, Yupan Huang, Tengchao Lv, Lei Cui, Qifeng Chen, and
+Furu Wei, “Textdiffuser: Diffusion models as text painters,” Advances
+in Neural Information Processing Systems , vol. 36, 2024.
+[15] Jingye Chen, Yupan Huang, Tengchao Lv, Lei Cui, Qifeng Chen, and
+Furu Wei, “Textdiffuser-2: Unleashing the power of language models
+for text rendering,” arXiv preprint arXiv:2311.16465 , 2023.
+[16] Yuxiang Tuo, Wangmeng Xiang, Jun-Yan He, Yifeng Geng, and Xuan-
+song Xie, “Anytext: Multilingual visual text generation and editing,”
+in The Twelfth International Conference on Learning Representations ,
+2023.
+[17] Yichong Huang, Xiaocheng Feng, Baohang Li, Chengpeng Fu, Wenshuai
+Huo, Ting Liu, and Bing Qin, “Aligning translation-specific understand-
+ing to general understanding in large language models,” arXiv preprint
+arXiv:2401.05072, 2024.
+[18] Matthieu Futeral, Cordelia Schmid, Ivan Laptev, Beno ˆıt Sagot, and
+Rachel Bawden, “Tackling ambiguity with images: Improved multi-
+modal machine translation and contrastive evaluation,” in Proceedings
+of the 61st Annual Meeting of the Association for Computational
+Linguistics (Volume 1: Long Papers) , 2023, pp. 5394–5413.
+[19] Kishore Papineni, Salim Roukos, Todd Ward, and Wei-Jing Zhu, “Bleu:
+a method for automatic evaluation of machine translation,” in Proceed-
+ings of the 40th annual meeting of the Association for Computational
+Linguistics, 2002, pp. 311–318.
+
+[20] Ricardo Rei, Craig Stewart, Ana C Farinha, and Alon Lavie, “Comet:
+A neural framework for mt evaluation,” in Proceedings of the 2020
+Conference on Empirical Methods in Natural Language Processing
+(EMNLP), 2020, pp. 2685–2702.
+[21] Tianyu Wang, Xin Yang, Ke Xu, Shaozhe Chen, Qiang Zhang, and
+Rynson WH Lau, “Spatial attentive single-image deraining with a high
+quality real rain dataset,” in Proceedings of the IEEE/CVF conference
+on computer vision and pattern recognition , 2019, pp. 12270–12279.
+VI. A PPENDIX
+A. Pseudo Parallel Image Pairs.
+Some examples of the constructed pseudo parallel En-Zh
+image pairs are shown in Figure 6.
+Fig. 6. Examples of the constructed pseudo parallel En-Zh image pairs.
+B. Case Study on Stage 1.
+We employ the Qwen-VL-Chat model as a multimodal mul-
+tilingual large-scale model in the first stage. In this section, we
+present a case study, as depicted in Figure 7, where the model
+accurately integrates image information during translation
+when utilizing our proposed COT method. In contrast, without
+its application, the model tends to produce incorrect translation
+results (step 1 in the image). Through experimentation, we
+have found that utilizing the target language (Chinese here)
+in our prompts yields superior results compared to using the
+source language.
+C. Text Erase Model.
+As for Text Erase Model, as we employ artificially con-
+structed images, we inherently possess backgrounds devoid of
+text from the outset. Thus, during training, we directly utilize
+preexisting background images. In real image testing scenar-
+ios, we employ AnyText to carry out the text removal process.
+In cases where the removal efficacy is subpar, we resort to
+employing image editing software for further refinement.
+D. Human evaluation details
+In our work, the Human evaluation details have drawn inspi-
+ration from some of the evaluation specifics used in AnyTrans.
+Before annotation, we also provide relevant examples to ensure
+that the annotators understand the annotation details. We have
+proposed three directions of evaluation metrics for two types
+of consistencies, each with 3 levels of scores:
+1.Translation Accuracy:
+• - Point 1: Translation errors or failure to recognize text,
+significant translation inaccuracies, completely irrelevant.
+• - Point 2: Correct translation but text is blurry or contains
+errors.
+• - Point 3: Translation is completely accurate, effectively
+integrates image information, text are displayed correctly
+without any issues.
+2.Font Style Consistency:
+• - Point 1:Low text style consistency. Text style is com-
+pletely inconsistent, with variations in color, font, thick-
+ness, etc.
+• - Point 2: Medium text style consistency. Partial con-
+sistency in text style, some elements like color, font,
+thickness are consistent.
+• - Point 3: High text style consistency. Text style is nearly
+entirely consistent, color, font, thickness match perfectly,
+and relevant text details are relatively consistent.
+3.Background Coherence:
+• - Point 1: Low coherence, clear boundaries between
+background and text (common in commercial systems),
+significant sense of layering.
+• - Point 2: Medium coherence, text can blend into the
+background without distinct boundaries.
+• - Point 3: High coherence, text and background seam-
+lessly integrate, background is clear with no sense of
+boundaries.
+E. Future Work.
+In the future, we will continue to advance in-image trans-
+lation from the following perspectives to further enhance its
+capabilities:
+• Improving the detailed content of IIMT: IIMT is a com-
+plex task encompassing multiple modalities and diverse
+scenarios. While our method has proposed a general
+framework, there are still intricacies that require reso-
+lution within this framework. These include translating
+vertical text images, translating multi-line text images,
+collaborative translation of multiple texts, translation of
+lengthy text images, and optimizing text positioning dur-
+ing translation. Our forthcoming research endeavors will
+concentrate on refining these aspects.
+• End-to-end IIMT frameworks: Presently, models that
+exhibit superior performance are often designed in a
+cascaded manner. Cascaded approaches may encounter
+issues such as error accumulation and high latency.
+
+Step 1: Recognize and Translate
+PROMPT: 请识别图片中的英文，并且将其翻译成中文。Please recognize the English text within the black box
+in the image and translate it into Chinese.
+Qwen-VL-CHAT: 图片中的英文单词"Bank"，翻译成中文为"银行"。
+Step 2: Provide a Description
+PROMPT: 请给出这张图片的详细描述。Please provide a detailed description of the information in the
+image.
+Qwen-VL-CHAT: 这是一张俯拍于湖面的照片，湖面平静，倒映着天空中的浅蓝色。湖的边缘是一片树林，将湖面和天
+空隔开。图片的左右两侧有少量的白色英文，可能是图片的标题或者一些说明。在图片的右侧，湖边有一些散落的石头
+和倒下的树木，看上去像是一个自然保护区。整体来说，这张照片给人一种宁静和自然的感觉。
+Step 3: Correct the recognition result
+PROMPT: 请结合图片信息判断识别的文本是否有拼写问题或者和图片含义不同的问题，如果有的话，请结合图片信息
+对其进行修改。Determine if there are any spelling errors or semantic inconsistencies in the identified text.
+If present, please rectify or remove them based on the preceding image information.
+Qwen-VL-CHAT:根据给出的图片信息，我识别的文本"BANK"并没有拼写问题，和图片含义也没有不同的问题。如果
+要说有误的话，那就是我误将了一些图片中的干扰信息当作了文本，例如图片右侧的英文。
+Step 4: Correct the Translation result
+PROMPT: 请考虑英文识别结果的多种中文翻译结果，结合图片的描述和图片中的实体信息选择最合适最贴切的翻译
+（并直接给出最符合图片描述的翻译结果）。Pay attention to any instances of polysemy in the translated
+text. If there are potential issues with polysemy, disambiguate based on the information provided in the
+image. (Avoid excessive explanations and  provide the most likely translation results directly.)
+Qwen-VL-CHAT: 图片中的英文单词"BANK"，翻译成中文有多种可能，例如"银行"、"河岸"、"河畔"等等。考虑到图
+片中的实际情况，我认为"河岸"是最贴切的翻译，因为它最能体现出图片中的景象，即平静的湖面和倒映着天空的水
+面，以及湖边的树林。因此，我选择"BANK"翻译为"河岸"。
+IMAGE
+Fig. 7. Case Study on Stage 1.
+Therefore, our upcoming research will investigate end-
+to-end methods for IIMT to overcome these challenges
+and improve efficiency.
+

@@ -1,0 +1,80 @@
+[
+  {
+    "index": 0,
+    "text": "净重：面具~180克/个十字项链~10克/个",
+    "bbox": [
+      59.0,
+      58.0,
+      751.0,
+      98.0
+    ],
+    "confidence": 0.9905165379697626,
+    "is_translatable": true,
+    "region_type": "text"
+  },
+  {
+    "index": 1,
+    "text": "周长50cm",
+    "bbox": [
+      720.0,
+      221.0,
+      868.0,
+      258.0
+    ],
+    "confidence": 0.9988145132859548,
+    "is_translatable": false,
+    "region_type": "spec"
+  },
+  {
+    "index": 2,
+    "text": "45cm",
+    "bbox": [
+      30.0,
+      463.0,
+      66.0,
+      549.0
+    ],
+    "confidence": 0.9998282492160797,
+    "is_translatable": false,
+    "region_type": "spec"
+  },
+  {
+    "index": 3,
+    "text": "十",
+    "bbox": [
+      746.0,
+      748.0,
+      842.0,
+      888.0
+    ],
+    "confidence": 0.7726255655288696,
+    "is_translatable": true,
+    "region_type": "text"
+  },
+  {
+    "index": 4,
+    "text": "35cm",
+    "bbox": [
+      422.0,
+      894.0,
+      503.0,
+      930.0
+    ],
+    "confidence": 0.9994874000549316,
+    "is_translatable": false,
+    "region_type": "spec"
+  },
+  {
+    "index": 5,
+    "text": "3cm",
+    "bbox": [
+      758.0,
+      898.0,
+      828.0,
+      931.0
+    ],
+    "confidence": 0.9993259906768799,
+    "is_translatable": false,
+    "region_type": "spec"
+  }
+]
