@@ -1,7 +1,13 @@
-"""Context-aware translation module with CoT and VLM support.
+"""Context-aware translation module with CoT support.
 
-Uses Qwen2.5 (text) or Qwen-VL (vision-language) for high-quality
-translation with Chain-of-Thought reasoning for e-commerce context.
+Uses an OpenAI-compatible LLM (configured by translation_model, e.g.
+Qwen2.5 / GLM) for high-quality translation with Chain-of-Thought
+reasoning for e-commerce context.
+
+Image context for translation is NOT done here as a multimodal call.
+Instead, a VLM-derived image description can be passed in via the
+`image_context` argument (Solution B produces it via ImageContextAnalyzer)
+and is injected into the CoT prompt's "Image description" field.
 """
 import json
 import logging
@@ -17,10 +23,10 @@ class ContextAwareTranslator:
     """Translate text regions with e-commerce context awareness.
 
     Supports:
-    - Standard LLM translation (Qwen2.5)
-    - Vision-Language Model translation (Qwen-VL) with image context
+    - Direct LLM translation
     - Chain-of-Thought (CoT) translation for complex marketing text
-    - Batch translation for efficiency
+    - Batch translation of all regions in one API call (context learning)
+    - Optional VLM image-context string injected into the CoT prompt
     """
 
     def __init__(self, config: PipelineConfig):
@@ -36,14 +42,21 @@ class ContextAwareTranslator:
             from openai import OpenAI
             api_base = self.config.translation_api_base or "http://127.0.0.1:8082/v1"
             api_key = self.config.translation_api_key or ""
+            http_kwargs = {}
+            if not getattr(self.config, "translation_verify_ssl", True):
+                import httpx
+                http_kwargs["http_client"] = httpx.Client(verify=False, timeout=120.0)
             self._client = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
+                **http_kwargs,
             )
             logger.info("Translation API client initialized (base: %s)", api_base)
         except ImportError:
-            logger.warning("openai package not available, translation will use stub")
-            self._client = None
+            raise ImportError(
+                "openai package not installed; translation requires it "
+                "(pip install openai). No stub fallback."
+            )
 
     def translate_text(
         self,
@@ -71,9 +84,6 @@ class ContextAwareTranslator:
             target_lang_name = lang_info.name_cn
         else:
             target_lang_name = lang_info.qwen_lang if lang_info else target_lang
-
-        if self._client is None:
-            return self._stub_translate(text, target_lang_name)
 
         if self.config.translation_use_cot:
             return self._translate_with_cot(text, target_lang_name, context, image_context)
@@ -150,40 +160,6 @@ class ContextAwareTranslator:
 
         return self._call_llm(system_prompt, user_prompt)
 
-    def _translate_with_vlm(
-        self,
-        text: str,
-        target_lang: str,
-        image_base64: str,
-        context: str = "",
-    ) -> str:
-        """Translate using Vision-Language Model with image context."""
-        system_prompt = (
-            f"You are a professional e-commerce translator. "
-            f"Translate the following Chinese text to {target_lang}, "
-            f"considering the visual context of the product image. "
-            f"Preserve brand names and specifications. "
-            f"Output ONLY the translation."
-        )
-
-        try:
-            response = self._client.chat.completions.create(
-                model=self.config.translation_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
-                        {"type": "text", "text": f"Translate this text to {target_lang}: {text}"},
-                    ]},
-                ],
-                max_tokens=self.config.translation_max_tokens,
-                temperature=self.config.translation_temperature,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error("VLM translation failed: %s", e)
-            return self._translate_with_cot(text, target_lang, context, "")
-
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
         """Call the LLM API with retry on rate-limit errors."""
         import time
@@ -195,13 +171,26 @@ class ContextAwareTranslator:
         max_retries = 3
         for attempt in range(max_retries + 1):
             try:
-                response = self._client.chat.completions.create(
+                # stream=True: some OpenAI-compatible gateways (e.g. MAAS)
+                # always return SSE chunks even for non-stream requests, which
+                # breaks the non-stream response object. Streaming is a safe
+                # superset that works for both.
+                stream = self._client.chat.completions.create(
                     model=self.config.translation_model,
                     messages=messages,
                     max_tokens=self.config.translation_max_tokens,
                     temperature=self.config.translation_temperature,
+                    stream=True,
                 )
-                result = response.choices[0].message.content.strip()
+                parts = []
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    content = getattr(delta, "content", None)
+                    if content:
+                        parts.append(content)
+                result = "".join(parts).strip()
                 # Extract just the translation if CoT produced extra text
                 if "OUTPUT:" in result:
                     result = result.split("OUTPUT:")[-1].strip()
@@ -221,11 +210,7 @@ class ContextAwareTranslator:
                     time.sleep(wait)
                     continue
                 logger.error("LLM call failed after %d attempts: %s", attempt + 1, e)
-                return ""
-
-    def _stub_translate(self, text: str, target_lang: str) -> str:
-        """Stub translation for testing without API."""
-        return f"[{target_lang}]{text}"
+                raise
 
     def translate_regions(
         self,
@@ -250,15 +235,6 @@ class ContextAwareTranslator:
         self._ensure_client()
         lang_info = self._lang_map.get(target_lang)
         target_lang_name = lang_info.qwen_lang if lang_info else target_lang
-
-        if self._client is None:
-            # Stub fallback
-            for r in translatable:
-                r.translated_text = f"[{target_lang_name}]{r.text}"
-            for r in regions:
-                if not r.is_translatable:
-                    r.translated_text = r.text
-            return regions
 
         # Build numbered text list for the prompt
         lines = []

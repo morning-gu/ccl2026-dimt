@@ -1,11 +1,12 @@
-"""Text erasure and rendering module with multiple backends.
+"""Text erasure and rendering, single-backend per solution (no degradation).
 
-Supports:
-- LaMA (Large Mask Inpainting) for high-quality text erasure
-- OpenCV inpainting as fallback
-- AnyText2 for style-preserving text rendering
-- Stable Diffusion inpainting for text fusion
-- PIL/Pillow as basic fallback renderer
+Each solution pins one erasure backend and one render backend via config:
+  Solution A (AnyTrans):  erasure=sd_inpaint  render=anytext2
+  Solution B (AnyText2):  erasure=lama        render=anytext2
+  Solution C (e-commerce):erasure=opencv     render=pil
+
+A missing dependency raises immediately instead of silently falling back to a
+weaker method. PIL rendering is Solution C's own method (not a fallback).
 """
 import logging
 from typing import List, Optional, Tuple
@@ -16,72 +17,109 @@ from .selective_translator import TextRegion
 
 logger = logging.getLogger(__name__)
 
+_font_manager = None  # lazy global so the FontManager is created only once
+
+
+def _get_font_manager():
+    global _font_manager
+    if _font_manager is None:
+        from .font_manager import FontManager
+        _font_manager = FontManager()
+    return _font_manager
+
 
 class TextEraser:
-    """Erase text from images while preserving background.
+    """Erase text from images while preserving background. Single backend, no fallback.
 
-    Backends: lama > opencv
+    Backends (by config.erasure_model):
+      "lama"      : simple-lama-inpainting (Solution B). AnyTrans uses
+                    stroke-level erasure (Li et al. 2023), which is not
+                    open-sourced; LaMA is the documented eraser here.
+      "sd_inpaint": diffusers StableDiffusionInpaintPipeline (Solution A),
+                    used for background restoration only.
+      "opencv"    : cv2.inpaint Telea (Solution C, e-commerce fast path).
+      "strokenet" : the cascaded stroke-level erasure used in the AnyTrans
+                    paper (STRNet from ZeroAct/SceneTextRemover-pytorch,
+                    a reimplementation of the cited stroke-level text erasure).
     """
 
     def __init__(self, config: PipelineConfig):
         self.config = config
         self._lama_model = None
+        self._sd_pipeline = None
+        self._strokenet = None
         self._backend = config.erasure_model
 
     def _init_lama(self):
-        """Initialize LaMA inpainting model."""
-        try:
-            # LaMA from simple-lama-inpainting or lama-cleaner
-            from simple_lama_inpainting import SimpleLAMA
-            self._lama_model = SimpleLAMA()
-            self._backend = "lama"
-            logger.info("LaMA erasure model initialized")
-        except ImportError:
-            try:
-                # Alternative: lama-cleaner
-                logger.info("simple-lama not available, trying lama-cleaner")
-                self._backend = "lama_server"
-            except Exception:
-                logger.warning("LaMA not available, falling back to OpenCV inpainting")
-                self._backend = "opencv"
+        """Initialize LaMA. Raises if simple-lama-inpainting is not installed."""
+        from simple_lama_inpainting import SimpleLAMA
+        self._lama_model = SimpleLAMA()
+        logger.info("LaMA erasure model initialized")
 
-    def erase(
-        self,
-        image: np.ndarray,
-        regions: List[TextRegion],
-        dilate_pixels: int = 0,
-    ) -> np.ndarray:
-        """Erase text regions from image.
+    def _init_sd_inpaint(self):
+        """Initialize SD inpainting for background restoration. Raises if
+        diffusers/torch are missing or the model cannot be loaded."""
+        from diffusers import StableDiffusionInpaintPipeline
+        import torch
+        model_id = "runwayml/stable-diffusion-inpainting"
+        self._sd_pipeline = StableDiffusionInpaintPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16 if self.config.device == "cuda" else torch.float32,
+        )
+        if self.config.device == "cuda":
+            self._sd_pipeline = self._sd_pipeline.to("cuda")
+        logger.info("SD inpainting erasure backend initialized")
 
-        Args:
-            image: Input image (H, W, 3) uint8.
-            regions: Text regions to erase.
-            dilate_pixels: Extra dilation around text bbox for clean erasure.
+    def _init_strokenet(self):
+        """Initialize the cascaded stroke-level erasure model (STRNet).
 
-        Returns:
-            Image with text erased (background inpainted).
+        Clone https://github.com/ZeroAct/SceneTextRemover-pytorch and set
+        STROKENET_REPO=/path/to/that/repo and STROKENET_CKPT=/path/to/weights.pth
+        (the repo ships only training code; you must train or supply a
+        checkpoint). Raises otherwise.
         """
+        import os, sys
+        import torch
+        repo = os.environ.get("STROKENET_REPO", "SceneTextRemover-pytorch")
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from network import STRNet  # type: ignore
+        self._strokenet = STRNet()
+        ckpt = os.environ.get("STROKENET_CKPT", "")
+        if not ckpt:
+            raise RuntimeError(
+                "STROKENET_CKPT not set. SceneTextRemover-pytorch ships no "
+                "pretrained weights; train one (python train.py) or supply a "
+                "checkpoint path, then set STROKENET_CKPT=/path/to/weights.pth"
+            )
+        self._strokenet.load_state_dict(torch.load(ckpt, map_location="cpu"))
+        self._strokenet.eval()
+        if self.config.device == "cuda":
+            self._strokenet = self._strokenet.cuda()
+        logger.info("STRNet (stroke-level erasure) initialized from %s", ckpt)
+
+    def erase(self, image, regions, dilate_pixels=0):
         if not regions:
             return image
-
+        # Lazily init the configured backend. No fallback: missing dep raises.
         if self._backend == "lama" and self._lama_model is None:
             self._init_lama()
-
-        # Build mask from regions
+        elif self._backend == "sd_inpaint" and self._sd_pipeline is None:
+            self._init_sd_inpaint()
+        elif self._backend == "strokenet" and self._strokenet is None:
+            self._init_strokenet()
         mask = self._build_mask(image.shape[:2], regions, dilate_pixels or self.config.erasure_dilate_pixels)
-
-        if self._backend == "lama" and self._lama_model is not None:
+        if self._backend == "lama":
             return self._erase_lama(image, mask)
-        else:
+        if self._backend == "sd_inpaint":
+            return self._erase_sd(image, mask)
+        if self._backend == "opencv":
             return self._erase_opencv(image, mask)
+        if self._backend == "strokenet":
+            return self._erase_strokenet(image, mask)
+        raise ValueError(f"Unknown erasure_model: {self._backend!r}")
 
-    def _build_mask(
-        self,
-        shape: Tuple[int, int],
-        regions: List[TextRegion],
-        dilate: int,
-    ) -> np.ndarray:
-        """Build binary mask from region bboxes."""
+    def _build_mask(self, shape, regions, dilate):
         h, w = shape
         mask = np.zeros((h, w), dtype=np.uint8)
         for region in regions:
@@ -92,252 +130,317 @@ class TextEraser:
             mask[y1:y2, x1:x2] = 255
         return mask
 
-    def _erase_lama(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """Erase using LaMA inpainting."""
+    def _erase_lama(self, image, mask):
         from PIL import Image
-        img_pil = Image.fromarray(image)
-        mask_pil = Image.fromarray(mask)
-        result = self._lama_model(img_pil, mask_pil)
+        result = self._lama_model(Image.fromarray(image), Image.fromarray(mask))
         return np.array(result)
 
-    def _erase_opencv(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """Erase using OpenCV inpainting (Telea / NS)."""
-        try:
-            import cv2
-            result = cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
-            return result
-        except ImportError:
-            # Fallback: simple blur-based inpainting
-            logger.warning("OpenCV not available, using blur-based erasure")
-            from PIL import Image, ImageFilter
-            img_pil = Image.fromarray(image)
-            mask_pil = Image.fromarray(mask).convert('L')
-            # Blur the masked region
-            blurred = img_pil.filter(ImageFilter.GaussianBlur(radius=10))
-            result = Image.composite(blurred, img_pil, mask_pil)
-            return np.array(result)
+    def _erase_sd(self, image, mask):
+        import torch
+        from PIL import Image
+        h, w = image.shape[:2]
+        img_pil = Image.fromarray(image).convert("RGB").resize((512, 512))
+        mask_pil = Image.fromarray(mask).convert("L").resize((512, 512))
+        with torch.no_grad():
+            output = self._sd_pipeline(
+                prompt="", image=img_pil, mask_image=mask_pil,
+                num_inference_steps=25, guidance_scale=1.0,
+            ).images[0]
+        result = np.array(output.resize((w, h)))
+        keep = mask == 0
+        if image.ndim == result.ndim and image.shape[:2] == result.shape[:2]:
+            result[keep] = image[keep]
+        return result
+
+    def _erase_opencv(self, image, mask):
+        import cv2
+        return cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+
+    def _erase_strokenet(self, image, mask):
+        """Erase via the cascaded stroke-level STRNet.
+
+        STRNet.forward(I, Mm) -> (Ms, Ite, Ms_, Ite_). Ite_ (the output of the
+        final G'r stage) is the erased image. Inputs are the image tensor
+        (B,3,H,W) in [0,1] and the text-region mask (B,1,H,W) in {0,1}.
+        """
+        import torch
+        import torch.nn.functional as F
+        h, w = image.shape[:2]
+        dev = next(self._strokenet.parameters()).device
+        # BGR uint8 -> RGB float [0,1], NCHW
+        img_t = torch.from_numpy(image[..., ::-1].copy()).float().div(255.0).permute(2, 0, 1).unsqueeze(0).to(dev)
+        m_t = torch.from_numpy((mask > 0).astype("float32")).float().unsqueeze(0).unsqueeze(0).to(dev)
+        with torch.no_grad():
+            _, _, _, ite_ = self._strokenet(img_t, m_t)
+        out = ite_[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy()
+        out = (out * 255).astype("uint8")[..., ::-1]  # RGB -> BGR
+        # STRNet replaces the whole image; keep non-text pixels identical
+        # so untouched regions are bit-exact to the source.
+        keep = mask == 0
+        if image.ndim == out.ndim and image.shape[:2] == out.shape[:2]:
+            out[keep] = image[keep]
+        return out
 
 
 class TextRenderer:
-    """Render translated text back into images.
+    """Render translated text. Single backend per solution, no degradation.
 
-    Backends: anytext2 > sd_inpaint > pil
+    Backends (by config.render_model):
+      "anytext2": the AnyText2 pipeline (tyxsspa/AnyText2). Required for
+                  Solutions A and B. Raises if AnyText2 is not installed.
+      "pil"     : Pillow-based rendering (Solution C's own method). Style
+                  info (color/font/weight/alignment) is preserved and, when
+                  a style_reference is given, extracted on the fly.
     """
 
     def __init__(self, config: PipelineConfig):
         self.config = config
         self._anytext2 = None
-        self._sd_pipeline = None
         self._backend = config.render_model
 
     def _init_anytext2(self):
-        """Initialize AnyText2 model for style-preserving rendering."""
-        try:
-            # AnyText2 from: https://github.com/tyx-ch/AnyText2
-            # Expected import pattern (adjust based on actual repo structure)
-            logger.info("Attempting to load AnyText2 model...")
-            # from anytext2 import AnyText2Pipeline
-            # self._anytext2 = AnyText2Pipeline.from_pretrained(
-            #     "model_path", device=self.config.device
-            # )
-            # For now, mark as unavailable until repo is cloned
-            raise ImportError("AnyText2 not yet installed - clone from GitHub first")
-        except ImportError as e:
-            logger.warning("AnyText2 not available: %s", e)
-            self._backend = "sd_inpaint"
+        """Initialize AnyText2.
 
-    def _init_sd_inpaint(self):
-        """Initialize Stable Diffusion inpainting pipeline."""
-        try:
-            from diffusers import StableDiffusionInpaintPipeline
-            import torch
-            model_id = "runwayml/stable-diffusion-inpainting"
-            self._sd_pipeline = StableDiffusionInpaintPipeline.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16 if self.config.device == "cuda" else torch.float32,
-            )
-            if self.config.device == "cuda":
-                self._sd_pipeline = self._sd_pipeline.to("cuda")
-            self._backend = "sd_inpaint"
-            logger.info("SD inpainting pipeline initialized")
-        except ImportError:
-            logger.warning("diffusers not available, falling back to PIL rendering")
-            self._backend = "pil"
-
-    def render(
-        self,
-        image: np.ndarray,
-        regions: List[TextRegion],
-        style_reference: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """Render translated text onto the image.
-
-        Args:
-            image: Image with text erased (background only).
-            regions: Text regions with translated_text filled.
-            style_reference: Optional original image for style reference.
-
-        Returns:
-            Image with translated text rendered.
+        Clone https://github.com/tyxsspa/AnyText2 and install its deps first:
+          git clone https://github.com/tyxsspa/AnyText2 /path/AnyText2
+          pip install -r /path/AnyText2/requirements.txt
+        Then set ANYTEXT2_MODEL_PATH=/path/AnyText2 (repo root contains
+        ms_wrapper.py and the models/ checkpoint dir). Raises otherwise.
         """
+        import os, sys
+        repo = os.environ.get(
+            "ANYTEXT2_MODEL_PATH",
+            getattr(self.config, "anytext2_model_path", "") or "AnyText2",
+        )
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from ms_wrapper import AnyText2Model  # type: ignore
+        infer_params = {
+            "use_fp16": self.config.device == "cuda",
+            "use_translator": False,  # we supply already-translated text
+            "font_path": os.path.join(repo, "font", "Arial_Unicode.ttf"),
+        }
+        ckpt = os.environ.get("ANYTEXT2_CKPT", "")
+        if ckpt:
+            infer_params["model_path"] = ckpt
+        self._anytext2 = AnyText2Model(model_dir=os.path.join(repo, "models"), **infer_params)
+        if self.config.device == "cuda":
+            self._anytext2 = self._anytext2.cuda(0)
+        self._anytext2_repo = repo
+        logger.info("AnyText2 model initialized from %s", repo)
+
+    def render(self, image, regions, style_reference=None):
         if not regions:
             return image
-
-        # Only render regions that have translated text
         render_regions = [r for r in regions if r.translated_text]
         if not render_regions:
             return image
-
         if self._backend == "anytext2":
             if self._anytext2 is None:
                 self._init_anytext2()
-            if self._anytext2 is not None:
-                return self._render_anytext2(image, render_regions, style_reference)
-            # Fall through if init failed
+            return self._render_anytext2(image, render_regions, style_reference)
+        if self._backend == "pil":
+            return self._render_pil(image, render_regions, style_reference)
+        raise ValueError(f"Unknown render_model: {self._backend!r}")
 
-        if self._backend in ("sd_inpaint", "anytext2"):
-            if self._sd_pipeline is None:
-                self._init_sd_inpaint()
-            if self._sd_pipeline is not None:
-                return self._render_sd_inpaint(image, render_regions)
-            # Fall through if init failed
+    def _render_anytext2(self, image, regions, style_reference):
+        """Call the real AnyText2 pipeline in edit mode.
 
-        return self._render_pil(image, render_regions)
-
-    def _render_anytext2(
-        self,
-        image: np.ndarray,
-        regions: List[TextRegion],
-        style_reference: Optional[np.ndarray],
-    ) -> np.ndarray:
-        """Render using AnyText2 - best quality, preserves style."""
-        # Build prompts for AnyText2
-        # AnyText2 takes: image, text prompts with position hints
-        prompts = []
-        for region in regions:
-            prompts.append({
-                "text": region.translated_text,
-                "bbox": region.bbox,
-                "style": region.style_info,
-            })
-
-        # result = self._anytext2(
-        #     image=image,
-        #     prompts=prompts,
-        #     style_reference=style_reference,
-        # )
-        # return result
-        logger.warning("AnyText2 render not yet implemented - falling back to PIL")
-        return self._render_pil(image, regions)
-
-    def _render_sd_inpaint(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        """Render using SD inpainting - good quality for single regions."""
-        from PIL import Image
-        import torch
-
-        result = image.copy()
-        for region in regions:
-            # Create mask for this region
-            h, w = image.shape[:2]
-            mask = np.zeros((h, w), dtype=np.uint8)
-            x1, y1, x2, y2 = [int(v) for v in region.bbox[:4]]
-            mask[y1:y2, x1:x2] = 255
-
-            img_pil = Image.fromarray(result).resize((512, 512))
-            mask_pil = Image.fromarray(mask).resize((512, 512))
-
-            prompt = f"Text saying '{region.translated_text}', product label, clear typography"
-            output = self._sd_pipeline(
-                prompt=prompt,
-                image=img_pil,
-                mask_image=mask_pil,
-                num_inference_steps=20,
-            ).images[0]
-
-            result = np.array(output.resize((w, h)))
-
-        return result
-
-    def _render_pil(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        """Render using PIL - basic but reliable fallback.
-
-        Attempts to match original font size and approximate style.
+        AnyText2 expects: an image, the translated text (one string per line,
+        separated by '#'), a draw_pos position mask marking where text goes,
+        and a params dict. We build all of these from the regions. Any failure
+        raises (no silent PIL fallback) so broken rendering is visible.
         """
-        from PIL import Image, ImageDraw, ImageFont
+        import os, cv2
+        h, w = image.shape[:2]
+        # AnyText2 text prompt: lines joined by '#'.
+        texts = [r.translated_text for r in regions]
+        text_prompt = "#".join(texts)
+        # draw_pos: white rectangle per region on a black canvas (255 = where
+        # text should appear). This is the position mask AnyText2 expects.
+        pos = np.zeros((h, w), dtype=np.uint8)
+        for r in regions:
+            x1, y1, x2, y2 = [int(v) for v in r.bbox[:4]]
+            pos[y1:y2, x1:x2] = 255
+        # Per-region text colors "r,g,b r,g,b ..." (AnyText2 text_colors fmt).
+        color_parts = []
+        for r in regions:
+            c = r.style_info.get("color")
+            if isinstance(c, (tuple, list)) and len(c) >= 3:
+                color_parts.append(",".join(str(int(v)) for v in c[:3]))
+            else:
+                color_parts.append("500,500,500")  # AnyText2 "default" sentinel
+        text_colors = " ".join(color_parts)
+        params = {
+            "mode": "edit",
+            "sort_priority": "↕↓→",
+            "show_debug": False,
+            "revise_pos": False,
+            "image_count": 1,
+            "ddim_steps": 20,
+            "image_width": w,
+            "image_height": h,
+            "strength": 1.0,
+            "attnx_scale": 1.0,
+            "font_hollow": False,
+            "cfg_scale": 7.5,
+            "eta": 0.0,
+            "a_prompt": "best quality, extremely detailed, 4k",
+            "n_prompt": "low-res, bad anatomy, extra digit, fewer digits, cropped, worst quality, low quality, bad hands, deformed, missing fingers, extra fingers",
+            "base_model_path": "",
+            "lora_path_ratio": [],
+            "glyline_font_path": ["None"] * len(regions),
+            "font_hint_image": [None] * len(regions),
+            "font_hint_mask": [None] * len(regions),
+            "text_colors": text_colors,
+        }
+        input_data = {
+            "img_prompt": image[..., ::-1].copy(),  # BGR->RGB for AnyText2
+            "text_prompt": text_prompt,
+            "seed": 1,
+            "draw_pos": pos,
+            "ori_image": image[..., ::-1].copy(),
+        }
+        results, rtn_code, rtn_warning, debug_info = self._anytext2(input_data, **params)
+        if rtn_code < 0 or not results:
+            raise RuntimeError(f"AnyText2 rendering failed (rtn_code={rtn_code}): {rtn_warning}")
+        return np.array(results[0])[..., ::-1]  # RGB->BGR
 
+    # ---- PIL renderer (Solution C's method) ----
+
+    def _render_pil(self, image, regions, style_reference=None):
+        from PIL import Image, ImageDraw
         img_pil = Image.fromarray(image)
         draw = ImageDraw.Draw(img_pil)
-
         for region in regions:
-            x1, y1, x2, y2 = [int(v) for v in region.bbox[:4]]
-            box_w = x2 - x1
-            box_h = y2 - y1
-            text = region.translated_text
-
-            # Estimate font size from bbox height
-            font_size = max(10, int(box_h * 0.8))
-
-            # Try to load a suitable font
-            font = self._load_font(font_size, text)
-
-            # Get text color from style_info or default to dark
-            fill_color = region.style_info.get("color", (0, 0, 0))
-            if isinstance(fill_color, str):
-                fill_color = (0, 0, 0)
-
-            # Center text in bbox
-            text_bbox = draw.textbbox((0, 0), text, font=font)
-            text_w = text_bbox[2] - text_bbox[0]
-            text_h = text_bbox[3] - text_bbox[1]
-
-            # Scale font if text doesn't fit
-            if text_w > box_w and font_size > 10:
-                scale = box_w / text_w
-                new_size = max(10, int(font_size * scale))
-                font = self._load_font(new_size, text)
-                text_bbox = draw.textbbox((0, 0), text, font=font)
-                text_w = text_bbox[2] - text_bbox[0]
-                text_h = text_bbox[3] - text_bbox[1]
-
-            tx = x1 + (box_w - text_w) // 2
-            ty = y1 + (box_h - text_h) // 2
-
-            draw.text((tx, ty), text, font=font, fill=fill_color)
-
+            if (not region.style_info.get("color")) and style_reference is not None:
+                region.style_info = _PilStyleHelper.enrich(region.style_info, style_reference, region)
+            self._draw_single(draw, img_pil, region)
         return np.array(img_pil)
 
-    def _load_font(self, size: int, text: str) -> object:
-        """Load an appropriate font for the text content."""
+    def _draw_single(self, draw, img_pil, region):
         from PIL import ImageFont
-        import os
+        x1, y1, x2, y2 = [int(v) for v in region.bbox[:4]]
+        box_w = x2 - x1
+        box_h = y2 - y1
+        text = region.translated_text
+        if not text or box_w <= 0 or box_h <= 0:
+            return
+        weight = region.style_info.get("font_weight")
+        font_size = int(region.style_info.get("font_size") or max(10, int(box_h * 0.8)))
+        font_size = self._fit_font_size(draw, text, font_size, box_w, box_h)
+        font = self._load_font(font_size, text, weight)
+        fill_color = region.style_info.get("color", (0, 0, 0))
+        if not isinstance(fill_color, (tuple, list)) or len(fill_color) < 3:
+            fill_color = (0, 0, 0)
+        fill_color = tuple(int(c) for c in fill_color[:3])
+        lines = self._wrap_text(text, font, box_w)
+        line_h = draw.textbbox((0, 0), "Ag", font=font)[3]
+        total_h = line_h * len(lines)
+        alignment = region.style_info.get("alignment", "center")
+        ty = y1 + max(0, (box_h - total_h) // 2)
+        for ln in lines:
+            ln_w = draw.textbbox((0, 0), ln, font=font)[2]
+            if alignment == "left":
+                tx = x1 + 2
+            elif alignment == "right":
+                tx = x1 + max(0, box_w - ln_w - 2)
+            else:
+                tx = x1 + max(0, (box_w - ln_w) // 2)
+            draw.text((tx, ty), ln, font=font, fill=fill_color)
+            ty += line_h
 
-        # Check if text contains CJK characters
-        has_cjk = any('\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' for c in text)
+    def _fit_font_size(self, draw, text, size, box_w, box_h):
+        size = max(10, size)
+        for _ in range(12):
+            font = self._load_font(size, text)
+            lines = self._wrap_text(text, font, box_w)
+            line_h = draw.textbbox((0, 0), "Ag", font=font)[3]
+            total_h = line_h * len(lines)
+            max_w = max((draw.textbbox((0, 0), ln, font=font)[2] for ln in lines), default=0)
+            if max_w <= box_w and total_h <= box_h:
+                return size
+            if size <= 10:
+                return 10
+            size = max(10, int(size * 0.9))
+        return size
 
-        # Try system fonts (macOS, Linux, Windows)
-        font_paths = []
-        if has_cjk:
-            # macOS CJK fonts (STHeiti, Hiragino, Songti)
-            font_paths.append("/System/Library/Fonts/STHeiti Medium.ttc")
-            font_paths.append("/System/Library/Fonts/Hiragino Sans GB.ttc")
-            font_paths.append("/System/Library/Fonts/Supplemental/Songti.ttc")
-            font_paths.append("/System/Library/Fonts/AppleSDGothicNeo.ttc")
-            # Linux CJK fonts
-            font_paths.append("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc")
-            font_paths.append("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
-            # Windows CJK fonts
-            font_paths.append("C:/Windows/Fonts/msyh.ttc")
-            font_paths.append("C:/Windows/Fonts/meiryo.ttc")
-        # Latin fallback (macOS, Windows, Linux)
-        font_paths.append("/System/Library/Fonts/Helvetica.ttc")
-        font_paths.append("C:/Windows/Fonts/arial.ttf")
-        font_paths.append("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    def _wrap_text(self, text, font, max_width):
+        from PIL import Image, ImageDraw
+        tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        if max_width <= 0:
+            return [text]
+        words = text.split(" ")
+        lines, cur = [], ""
+        for w in words:
+            trial = w if not cur else cur + " " + w
+            if tmp.textbbox((0, 0), trial, font=font)[2] <= max_width or not cur:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        final = []
+        for ln in lines:
+            if tmp.textbbox((0, 0), ln, font=font)[2] <= max_width:
+                final.append(ln)
+                continue
+            cur = ""
+            for ch in ln:
+                trial = cur + ch
+                if tmp.textbbox((0, 0), trial, font=font)[2] <= max_width:
+                    cur = trial
+                else:
+                    if cur:
+                        final.append(cur)
+                    cur = ch
+            if cur:
+                final.append(cur)
+        return final or [text]
 
-        for path in font_paths:
-            if os.path.exists(path):
-                try:
-                    return ImageFont.truetype(path, size)
-                except Exception:
-                    continue
+    def _load_font(self, size, text, weight=None):
+        from PIL import ImageFont
+        bold = (weight == "bold")
+        return _get_font_manager().load_font(size, text, bold)
 
-        return ImageFont.load_default()
+
+class _PilStyleHelper:
+    """On-the-fly style extraction for the PIL renderer (Solution C)."""
+
+    @staticmethod
+    def enrich(style_info, image, region):
+        style = dict(style_info or {})
+        try:
+            x1, y1, x2, y2 = [max(0, int(v)) for v in region.bbox[:4]]
+            h, w = image.shape[:2]
+            x2 = min(w, x2); y2 = min(h, y2)
+            if x2 <= x1 or y2 <= y1:
+                return style
+            roi = image[y1:y2, x1:x2]
+            if roi.size == 0:
+                return style
+            if not style.get("color"):
+                style["color"] = _PilStyleHelper._text_color(roi)
+            if not style.get("font_size"):
+                style["font_size"] = max(10, int((y2 - y1) * 0.75))
+        except Exception:
+            pass
+        return style
+
+    @staticmethod
+    def _text_color(roi):
+        try:
+            pixels = roi.reshape(-1, roi.shape[-1] if roi.ndim == 3 else 1).astype(np.int16)
+            if pixels.shape[0] == 0:
+                return (0, 0, 0)
+            mean = pixels.mean(axis=0)
+            bright = pixels.mean(axis=1)
+            thresh = mean.mean()
+            dark_mask = bright < thresh
+            dark_mean = pixels[dark_mask].mean(axis=0) if dark_mask.any() else mean
+            light_mean = pixels[~dark_mask].mean(axis=0) if (~dark_mask).any() else dark_mean
+            color = dark_mean if dark_mask.sum() <= (~dark_mask).sum() else light_mean
+            return tuple(int(c) for c in np.clip(color, 0, 255))
+        except Exception:
+            return (0, 0, 0)

@@ -1,23 +1,38 @@
-﻿# Core dependencies
+# ============================================================
+# CCL2026-DIMT dependencies (single-backend per solution, no degradation)
+# Install everything in a CUDA-enabled environment:
+#   python -m venv .venv && source .venv/bin/activate   (Windows: .\.venv\Scripts\activate)
+#   pip install -r requirements.txt
+# Then clone + install AnyText2 (not pip-installable):
+#   git clone https://github.com/tyxsspa/AnyText2 ../AnyText2
+#   pip install -r ../AnyText2/requirements.txt
+#   export ANYTEXT2_MODEL_PATH=../AnyText2   (Windows: setx ANYTEXT2_MODEL_PATH ..\AnyText2)
+# ============================================================
+
+# --- Core ---
 numpy>=1.24.0
 opencv-python>=4.8.0
 Pillow>=10.0.0
+python-dotenv>=1.0.0
+certifi>=2023.7.22
 
-# OCR
+# --- OCR (all solutions): RapidOCR = PP-OCRv4 ONNX runtime ---
 rapidocr-onnxruntime>=1.3.0
 
-# Translation API
+# --- Translation (all solutions): OpenAI-compatible API client ---
 openai>=1.0.0
 httpx>=0.24.0
 
-# Optional: Advanced OCR backends
-# paddleocr>=2.7.0
-# easyocr>=1.7.0
+# --- Erasure: Solution A (SD inpainting) ---
+diffusers>=0.27.0
+transformers>=4.40.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+torch>=2.1.0
 
-# Optional: Advanced erasure/rendering
-# simple-lama-inpainting>=0.1.0
-# diffusers>=0.21.0
-# torch>=2.0.0
+# --- Erasure: Solution B (LaMA) ---
+simple-lama-inpainting>=0.1.0
 
-# Optional: AnyText2 (clone from GitHub)
-# git+https://github.com/tyx-ch/AnyText2.git
+# --- Rendering: Solutions A & B (AnyText2) ---
+# AnyText2 is cloned from GitHub (see header) and installed separately.
+# It pulls in its own deps (controlnet_aux, einops, timm, etc.).

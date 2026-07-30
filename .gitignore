@@ -27,6 +27,7 @@ debug/
 
 # Logs
 logs/
+*.log
 
 # Model caches
 models/
@@ -34,3 +35,14 @@ models/
 *.pt
 *.pth
 *.safetensors
+
+# External cloned repos (AnyText2, SceneTextRemover, etc.)
+external/
+
+# Font binaries (downloaded by setup_and_run.sh/.ps1, not tracked)
+fonts/*.ttf
+fonts/*.otf
+fonts/*.ttc
+
+# Virtual environment
+.venv/

@@ -231,9 +231,7 @@ class SolutionAPipeline:
                 logger.info("    Done in %.2fs", elapsed)
             except Exception as e:
                 logger.error("Failed processing %s -> %s: %s", image_path, lang_code, e)
-                import shutil
-                shutil.copy2(image_path, output_path)
-                results[lang_code] = output_path
+                raise  # no degradation: surface the failure instead of copying the source
 
         return results
 
