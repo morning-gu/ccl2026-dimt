@@ -16,6 +16,9 @@ build/
 Thumbs.db
 .DS_Store
 
+# Environment (contains API keys)
+.env
+
 # Large generated outputs (tracked via LFS selectively)
 outputs/
 

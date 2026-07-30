@@ -19,6 +19,7 @@ if "SSL_CERT_FILE" not in os.environ:
 sys.stderr.reconfigure(encoding="utf-8")
 
 from common.config import PipelineConfig, TARGET_LANGUAGES
+from common.config import load_config_from_env
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,27 +38,10 @@ def get_config(solution_name):
         input_dir=INPUT_DIR,
         output_dir=os.path.join(OUTPUT_BASE, f"results_{solution_name}"),
         target_langs=["en", "es", "pt", "ja", "fr"],
-        translation_model="qwen-mt-plus",
-        translation_api_base="https://llm-a2uwnqapvtxla90o.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-        translation_api_key="sk-ws-H.EIPLMYD.NCt4.MEUCIB-zvDx6krzyVfQO5i9yY67VGOih5BnjwN-0sCOc75zfAiEA9pc3naJ3ShMr2xuSU3I02khYYzMlDKoxHNlVnmTEqnY",
-        translation_use_cot=True,
-        device="cpu",
-        batch_size=1,
-        # Debug intermediate file settings
-        debug_enabled=True,
         debug_dir=os.path.join(OUTPUT_BASE, "debug", solution_name),
-        debug_ocr=True,
-        debug_mask=True,
-        debug_erased=True,
-        debug_translation=True,
-        debug_style=True,
-        debug_classification=True,
-        debug_quality=True,
-        debug_render=True,
-        debug_original=True,
-        debug_context=True,
-        debug_product=True,
     )
+    # Override from .env / environment variables
+    cfg = load_config_from_env(cfg)
     if solution_name == "solution_a":
         cfg.render_model = "pil"
         cfg.erasure_model = "opencv"

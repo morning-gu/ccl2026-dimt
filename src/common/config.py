@@ -4,6 +4,33 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
 
+def _load_dotenv_file():
+    """Load .env file from project root into os.environ (without overwriting)."""
+    try:
+        from dotenv import load_dotenv
+        from pathlib import Path
+        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+    except ImportError:
+        from pathlib import Path
+        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        if env_path.exists():
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip()
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+
+
+_load_dotenv_file()
+
+
 @dataclass
 class LangConfig:
     """Target language configuration."""
@@ -131,17 +158,53 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
         "DEBUG_ERASED": "debug_erased",
         "DEBUG_TRANSLATION": "debug_translation",
     }
+
+    bool_fields = {
+        "TRANSLATION_USE_VLM": "translation_use_vlm",
+        "TRANSLATION_USE_COT": "translation_use_cot",
+        "RENDER_PRESERVE_STYLE": "render_preserve_style",
+        "RENDER_PRESERVE_BACKGROUND": "render_preserve_background",
+        "SELECTIVE_ENABLED": "selective_enabled",
+        "PRESERVE_BRAND": "preserve_brand",
+        "PRESERVE_LOGO": "preserve_logo",
+        "DEBUG_ENABLED": "debug_enabled",
+        "DEBUG_OCR": "debug_ocr",
+        "DEBUG_MASK": "debug_mask",
+        "DEBUG_ERASED": "debug_erased",
+        "DEBUG_TRANSLATION": "debug_translation",
+        "DEBUG_STYLE": "debug_style",
+        "DEBUG_CLASSIFICATION": "debug_classification",
+        "DEBUG_QUALITY": "debug_quality",
+        "DEBUG_RENDER": "debug_render",
+        "DEBUG_ORIGINAL": "debug_original",
+        "DEBUG_CONTEXT": "debug_context",
+        "DEBUG_PRODUCT": "debug_product",
+    }
+
+    int_fields = {
+        "BATCH_SIZE": "batch_size",
+        "TRANSLATION_MAX_TOKENS": "translation_max_tokens",
+        "OCR_DET_LIMIT_SIDE": "ocr_det_limit_side",
+        "ERASURE_DILATE_PIXELS": "erasure_dilate_pixels",
+    }
+
+    float_fields = {
+        "TRANSLATION_TEMPERATURE": "translation_temperature",
+        "LOGO_DETECTION_THRESHOLD": "logo_detection_threshold",
+    }
+
+    env_map.update(bool_fields)
+    env_map.update(int_fields)
+    env_map.update(float_fields)
+
     for env_key, field_name in env_map.items():
         val = os.environ.get(env_key)
         if val is not None:
-            if field_name in ("batch_size",):
+            if field_name in int_fields.values():
                 val = int(val)
-            elif field_name in ("debug_enabled", "debug_ocr", "debug_mask",
-                                "debug_erased", "debug_translation",
-                                "debug_style", "debug_classification",
-                                "debug_quality", "debug_render",
-                                "debug_original", "debug_context",
-                                "debug_product"):
+            elif field_name in float_fields.values():
+                val = float(val)
+            elif field_name in bool_fields.values():
                 val = val.lower() in ("1", "true", "yes")
             setattr(cfg, field_name, val)
     return cfg

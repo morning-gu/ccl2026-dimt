@@ -219,30 +219,76 @@ class ContextAwareTranslator:
         target_lang: str,
         image_context: str = "",
     ) -> List[TextRegion]:
-        """Translate all translatable regions.
+        """Translate all translatable regions in one batched API call.
 
         Preserved regions are left unchanged.
         """
         # Build context from all text in the image
         all_text = " | ".join(r.text for r in regions if r.text)
 
-        translated = []
-        for region in regions:
-            if not region.is_translatable:
-                region.translated_text = region.text  # preserve as-is
-                translated.append(region)
-                continue
+        translatable = [r for r in regions if r.is_translatable]
+        if not translatable:
+            for r in regions:
+                r.translated_text = r.text
+            return regions
 
-            result = self.translate_text(
-                text=region.text,
-                target_lang=target_lang,
-                context=all_text,
-                image_context=image_context,
-            )
-            region.translated_text = result if result else region.text
-            translated.append(region)
+        # Batch: send all texts in one API call
+        self._ensure_client()
+        lang_info = self._lang_map.get(target_lang)
+        target_lang_name = lang_info.qwen_lang if lang_info else target_lang
 
-        return translated
+        if self._client is None:
+            # Stub fallback
+            for r in translatable:
+                r.translated_text = f"[{target_lang_name}]{r.text}"
+            for r in regions:
+                if not r.is_translatable:
+                    r.translated_text = r.text
+            return regions
+
+        # Build numbered text list for the prompt
+        lines = []
+        for i, r in enumerate(translatable):
+            lines.append(f"[{i+1}] {r.text}")
+        numbered_text = "\n".join(lines)
+
+        system_prompt = (
+            f"You are a professional e-commerce translator. "
+            f"Translate the following numbered Chinese text lines to {target_lang_name}.\n"
+            f"Rules:\n"
+            f"- Preserve brand names, product codes, specifications as-is\n"
+            f"- Adapt marketing tone to be natural in {target_lang_name}\n"
+            f"- Output EXACTLY the same number of lines, each prefixed with the same [number]\n"
+            f"- Output format: [1] translation1\\n[2] translation2\\n..."
+        )
+        parts = [f"Texts to translate:\n{numbered_text}"]
+        if all_text:
+            parts.append(f"\nFull image context: {all_text[:500]}")
+        if image_context:
+            parts.append(f"\nImage description: {image_context}")
+        user_prompt = "\n".join(parts)
+
+        raw = self._call_llm(system_prompt, user_prompt)
+
+        # Parse numbered results
+        results_map = {}
+        if raw:
+            import re
+            for m in re.finditer(r'\[(\d+)\]\s*(.+?)(?=\n\[|\Z)', raw, re.DOTALL):
+                idx = int(m.group(1))
+                text = m.group(2).strip()
+                results_map[idx] = text
+
+        # Apply translations
+        for i, r in enumerate(translatable):
+            translated = results_map.get(i + 1, "")
+            r.translated_text = translated if translated else r.text
+
+        for r in regions:
+            if not r.is_translatable:
+                r.translated_text = r.text
+
+        return regions
 
     def translate_regions_batch(
         self,
