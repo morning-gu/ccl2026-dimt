@@ -68,10 +68,10 @@ class PipelineConfig:
     translation_max_tokens: int = 2048
     translation_temperature: float = 0.3
     translation_api_base: str = "http://127.0.0.1:8082/v1"
-    translation_api_key: str = "sk-12345679"
+    translation_api_key: str = ""
     # VLM (Vision-Language Model) settings for image context analysis
-    vlm_api_base: str = "https://ws-8pchdlfah63suwpb.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    vlm_api_key: str = "sk-ws-H.EIPRMPL.vhSX.MEUCIQCZ_V80gnWUx5kwDpO_vdr7v4mK3m05uj-sYH5-tteOLwIgBcygZBr5lBN_0RqWq1Qt4wwRsZbWL5mvj_O7C2b6hRw"
+    vlm_api_base: str = ""
+    vlm_api_key: str = ""
     vlm_model: str = "qwen3.7-plus"
     # Selective translation settings
     selective_enabled: bool = True
@@ -146,8 +146,6 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
         "VLM_API_BASE": "vlm_api_base",
         "VLM_API_KEY": "vlm_api_key",
         "VLM_MODEL": "vlm_model",
-        "RENDER_MODEL": "render_model",
-        "ERASURE_MODEL": "erasure_model",
         "DEVICE": "device",
         "BATCH_SIZE": "batch_size",
         "LOG_LEVEL": "log_level",
@@ -160,8 +158,6 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
     }
 
     bool_fields = {
-        "TRANSLATION_USE_VLM": "translation_use_vlm",
-        "TRANSLATION_USE_COT": "translation_use_cot",
         "RENDER_PRESERVE_STYLE": "render_preserve_style",
         "RENDER_PRESERVE_BACKGROUND": "render_preserve_background",
         "SELECTIVE_ENABLED": "selective_enabled",

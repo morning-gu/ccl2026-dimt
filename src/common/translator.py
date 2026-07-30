@@ -35,7 +35,7 @@ class ContextAwareTranslator:
         try:
             from openai import OpenAI
             api_base = self.config.translation_api_base or "http://127.0.0.1:8082/v1"
-            api_key = self.config.translation_api_key or "sk-12345679"
+            api_key = self.config.translation_api_key or ""
             self._client = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
@@ -185,29 +185,43 @@ class ContextAwareTranslator:
             return self._translate_with_cot(text, target_lang, context, "")
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Call the LLM API with rate limiting."""
+        """Call the LLM API with retry on rate-limit errors."""
         import time
-        try:
-            # Rate limit: small delay between calls to avoid 429 errors
-            time.sleep(0.8)
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": user_prompt})
-            response = self._client.chat.completions.create(
-                model=self.config.translation_model,
-                messages=messages,
-                max_tokens=self.config.translation_max_tokens,
-                temperature=self.config.translation_temperature,
-            )
-            result = response.choices[0].message.content.strip()
-            # Extract just the translation if CoT produced extra text
-            if "OUTPUT:" in result:
-                result = result.split("OUTPUT:")[-1].strip()
-            return result
-        except Exception as e:
-            logger.error("LLM call failed: %s", e)
-            return ""
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.config.translation_model,
+                    messages=messages,
+                    max_tokens=self.config.translation_max_tokens,
+                    temperature=self.config.translation_temperature,
+                )
+                result = response.choices[0].message.content.strip()
+                # Extract just the translation if CoT produced extra text
+                if "OUTPUT:" in result:
+                    result = result.split("OUTPUT:")[-1].strip()
+                return result
+            except Exception as e:
+                # Retry on rate-limit (429) or server errors (5xx)
+                is_rate_limit = "429" in str(e) or "rate" in str(e).lower()
+                is_server_error = any(
+                    code in str(e) for code in ("500", "502", "503", "504")
+                )
+                if attempt < max_retries and (is_rate_limit or is_server_error):
+                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning(
+                        "LLM call failed (attempt %d/%d), retrying in %ds: %s",
+                        attempt + 1, max_retries, wait, e,
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error("LLM call failed after %d attempts: %s", attempt + 1, e)
+                return ""
 
     def _stub_translate(self, text: str, target_lang: str) -> str:
         """Stub translation for testing without API."""

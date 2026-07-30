@@ -42,8 +42,9 @@ class SolutionAPipeline:
     def __init__(self, config: Optional[PipelineConfig] = None):
         self.config = config or PipelineConfig()
         self.config = load_config_from_env(self.config)
-        self.config.render_model = "anytext2"
-        self.config.erasure_model = "sd_inpaint"
+        # Model backends (render/erasure) are set by the caller via
+        # PipelineConfig, run_all_solutions.py, or env vars. Do not
+        # override them here -- respect the caller's choice.
 
         # Initialize components
         self.ocr = OCRDetector(self.config)

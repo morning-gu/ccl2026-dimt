@@ -222,11 +222,9 @@ class SolutionBPipeline:
     def __init__(self, config: Optional[PipelineConfig] = None):
         self.config = config or PipelineConfig()
         self.config = load_config_from_env(self.config)
-        # Override for Solution B's design choices
-        self.config.render_model = "anytext2"
-        self.config.erasure_model = "lama"
-        self.config.translation_use_vlm = True
-        self.config.translation_use_cot = True
+        # Model backends and translation flags are set by the caller via
+        # PipelineConfig, run_all_solutions.py, or env vars. Do not
+        # override them here -- respect the caller's choice.
 
         # Initialize components
         self.ocr = OCRDetector(self.config)

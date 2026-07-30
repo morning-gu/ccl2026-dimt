@@ -333,9 +333,8 @@ class SolutionCPipeline:
     def __init__(self, config: Optional[PipelineConfig] = None):
         self.config = config or PipelineConfig()
         self.config = load_config_from_env(self.config)
-        # Solution C uses fast PIL-based rendering
-        self.config.render_model = "pil"
-        self.config.erasure_model = "opencv"  # fast, no GPU needed
+        # Model backends are set by the caller via PipelineConfig,
+        # run_all_solutions.py, or env vars. Do not override them here.
 
         # Initialize components
         self.ocr = OCRDetector(self.config)

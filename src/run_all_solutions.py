@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Run all three solutions on the competition dataset."""
 import os
 import sys
@@ -42,13 +42,23 @@ def get_config(solution_name):
     )
     # Override from .env / environment variables
     cfg = load_config_from_env(cfg)
+    # Solution-specific backends (NOT configurable via env vars).
+    #
+    # Design intent (see README):
+    #   A: SD inpaint erasure + AnyText2 rendering (high quality)
+    #   B: LaMA erasure + AnyText2 rendering + VLM context (highest quality)
+    #   C: OpenCV erasure + PIL rendering (fast, no GPU)
+    #
+    # Heavy backends (anytext2/lama/sd_inpaint) fall back to PIL/OpenCV
+    # when the model libs are not installed, so the design defaults are safe.
     if solution_name == "solution_a":
-        cfg.render_model = "pil"
-        cfg.erasure_model = "opencv"
+        cfg.render_model = "anytext2"
+        cfg.erasure_model = "sd_inpaint"
     elif solution_name == "solution_b":
-        cfg.render_model = "pil"
-        cfg.erasure_model = "opencv"
-        cfg.translation_use_vlm = False
+        cfg.render_model = "anytext2"
+        cfg.erasure_model = "lama"
+        cfg.translation_use_vlm = True
+        cfg.translation_use_cot = True
     elif solution_name == "solution_c":
         cfg.render_model = "pil"
         cfg.erasure_model = "opencv"
