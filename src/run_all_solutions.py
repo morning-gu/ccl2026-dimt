@@ -45,12 +45,12 @@ def get_config(solution_name):
     # Solution-specific backends (NOT configurable via env vars).
     #
     # Design intent (see README):
-    #   A: SD inpaint erasure + AnyText2 rendering (high quality)
+    #   A: SD inpainting erasure + AnyText2 rendering (AnyTrans-faithful)
     #   B: LaMA erasure + AnyText2 rendering + VLM context (highest quality)
     #   C: OpenCV erasure + PIL rendering (fast, no GPU)
     #
-    # Heavy backends (anytext2/lama/sd_inpaint) fall back to PIL/OpenCV
-    # when the model libs are not installed, so the design defaults are safe.
+    # Heavy backends (anytext2/lama/sd_inpaint) raise if deps are missing;
+    # there is no silent fallback to PIL/OpenCV.
     if solution_name == "solution_a":
         cfg.render_model = "anytext2"
         cfg.erasure_model = "sd_inpaint"

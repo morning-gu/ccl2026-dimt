@@ -2,7 +2,7 @@
 
 Architecture:
   1. Product image classification (product type, layout template)
-  2. Batch OCR detection (PaddleOCR with batch mode)
+  2. OCR detection (RapidOCR / PP-OCRv4)
   3. E-commerce-specific selective translation
      - Product name: translate with care (may contain brand)
      - Slogan/feature list: full translation
@@ -15,11 +15,16 @@ Architecture:
      - PIL-based rendering with smart font selection
   6. Post-processing quality check
 
+Method provenance: this is an engineering baseline (not a paper
+reproduction), modeled on the AI_Image_Translator cross-border e-commerce
+tool. Its OpenCV erasure + PIL rendering IS the intended method here (not a
+fallback from diffusion), so it is consistent with "no degradation".
+
 This solution is optimized for:
   - Speed: batch processing, template-based rendering (no diffusion)
   - E-commerce accuracy: product-specific heuristics
-  - Robustness: fallback at every stage, quality validation
-  - The AI_Image_Translator approach (proven for e-commerce)
+  - Robustness: single backend per stage, failures surface (no fallback)
+  - E-commerce accuracy via product-specific heuristics
 
 Key differentiators:
   - No heavy diffusion models (PIL-based rendering for speed)
@@ -414,7 +419,7 @@ class SolutionCPipeline:
         self.debug.save_erased(erased_image, image_stem, target_lang)
 
         # Step 6: Render with PIL (fast, template-aware)
-        result_image = self.renderer.render(erased_image, translatable_regions)
+        result_image = self.renderer.render(erased_image, translatable_regions, style_reference=image)
         logger.info("  Rendering (PIL): completed")
         self.debug.save_render_result(result_image, image_stem, target_lang)
 
@@ -519,7 +524,7 @@ class SolutionCPipeline:
 
                 # Render
                 lang_translatable = [r for r in lang_regions if r.is_translatable]
-                result_image = self.renderer.render(erased_image, lang_translatable)
+                result_image = self.renderer.render(erased_image, lang_translatable, style_reference=image)
                 logger.info("    Rendering (PIL): completed")
                 self.debug.save_render_result(result_image, stem, lang_code)
 
@@ -536,9 +541,7 @@ class SolutionCPipeline:
                 logger.info("    Done in %.2fs", elapsed)
             except Exception as e:
                 logger.error("Failed processing %s -> %s: %s", image_path, lang_code, e)
-                import shutil
-                shutil.copy2(image_path, output_path)
-                results[lang_code] = (output_path, {})
+                raise  # no degradation: surface the failure instead of copying the source
 
         return results
 

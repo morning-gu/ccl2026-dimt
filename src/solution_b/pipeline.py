@@ -166,9 +166,6 @@ class ImageContextAnalyzer:
     def analyze(self, image: np.ndarray) -> str:
         """Generate a description of the image content for translation context."""
         self._ensure_client()
-        if self._client is None:
-            return ""
-
         try:
             import base64
             from PIL import Image
@@ -207,13 +204,17 @@ class ImageContextAnalyzer:
             return
         try:
             from openai import OpenAI
-            # Use VLM endpoint if configured, otherwise fall back to translation endpoint
+            # Use the VLM endpoint if configured, else the translation endpoint
+            # (both may share one gateway). Missing openai raises, no stub.
             api_base = getattr(self.config, 'vlm_api_base', '') or self.config.translation_api_base
             api_key = getattr(self.config, 'vlm_api_key', '') or self.config.translation_api_key
             self._client = OpenAI(api_key=api_key, base_url=api_base)
             logger.info("VLM client initialized (base: %s)", api_base)
         except ImportError:
-            self._client = None
+            raise ImportError(
+                "openai package not installed; VLM image-context analysis "
+                "requires it (pip install openai). No stub fallback."
+            )
 
 
 class SolutionBPipeline:
@@ -428,9 +429,7 @@ class SolutionBPipeline:
                 logger.info("    Done in %.2fs", elapsed)
             except Exception as e:
                 logger.error("Failed processing %s -> %s: %s", image_path, lang_code, e)
-                import shutil
-                shutil.copy2(image_path, output_path)
-                results[lang_code] = output_path
+                raise  # no degradation: surface the failure instead of copying the source
 
         return results
 

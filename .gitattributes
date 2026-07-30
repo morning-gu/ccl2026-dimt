@@ -4,3 +4,6 @@ debug/**/*.png filter=lfs diff=lfs merge=lfs -text
 outputs/**/*.png filter=lfs diff=lfs merge=lfs -text
 outputs/**/*.jpg filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
+fonts/**/*.ttf filter=lfs diff=lfs merge=lfs -text
+fonts/**/*.otf filter=lfs diff=lfs merge=lfs -text
+fonts/**/*.ttc filter=lfs diff=lfs merge=lfs -text

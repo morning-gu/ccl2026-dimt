@@ -67,6 +67,9 @@ class PipelineConfig:
     translation_use_cot: bool = True
     translation_max_tokens: int = 2048
     translation_temperature: float = 0.3
+    # Gateway compatibility: some OpenAI-compatible gateways (e.g. enterprise
+    # MAAS) use a self-signed CA not in certifi, or force SSE streaming.
+    translation_verify_ssl: bool = True
     translation_api_base: str = "http://127.0.0.1:8082/v1"
     translation_api_key: str = ""
     # VLM (Vision-Language Model) settings for image context analysis
@@ -163,6 +166,7 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
         "SELECTIVE_ENABLED": "selective_enabled",
         "PRESERVE_BRAND": "preserve_brand",
         "PRESERVE_LOGO": "preserve_logo",
+        "TRANSLATION_VERIFY_SSL": "translation_verify_ssl",
         "DEBUG_ENABLED": "debug_enabled",
         "DEBUG_OCR": "debug_ocr",
         "DEBUG_MASK": "debug_mask",
