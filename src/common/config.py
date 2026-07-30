@@ -42,6 +42,10 @@ class PipelineConfig:
     translation_temperature: float = 0.3
     translation_api_base: str = "http://127.0.0.1:8082/v1"
     translation_api_key: str = "sk-12345679"
+    # VLM (Vision-Language Model) settings for image context analysis
+    vlm_api_base: str = "https://ws-8pchdlfah63suwpb.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    vlm_api_key: str = "sk-ws-H.EIPRMPL.vhSX.MEUCIQCZ_V80gnWUx5kwDpO_vdr7v4mK3m05uj-sYH5-tteOLwIgBcygZBr5lBN_0RqWq1Qt4wwRsZbWL5mvj_O7C2b6hRw"
+    vlm_model: str = "qwen3.7-plus"
     # Selective translation settings
     selective_enabled: bool = True
     brand_keywords_file: str = ""
@@ -112,6 +116,9 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
         "TRANSLATION_MODEL": "translation_model",
         "TRANSLATION_API_BASE": "translation_api_base",
         "TRANSLATION_API_KEY": "translation_api_key",
+        "VLM_API_BASE": "vlm_api_base",
+        "VLM_API_KEY": "vlm_api_key",
+        "VLM_MODEL": "vlm_model",
         "RENDER_MODEL": "render_model",
         "ERASURE_MODEL": "erasure_model",
         "DEVICE": "device",

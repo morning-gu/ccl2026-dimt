@@ -65,7 +65,12 @@ class ContextAwareTranslator:
         """
         self._ensure_client()
         lang_info = self._lang_map.get(target_lang)
-        target_lang_name = lang_info.qwen_lang if lang_info else target_lang
+        is_mt_model = "mt" in self.config.translation_model.lower()
+        # MT models use Chinese prompts, so use Chinese lang name
+        if is_mt_model and lang_info:
+            target_lang_name = lang_info.name_cn
+        else:
+            target_lang_name = lang_info.qwen_lang if lang_info else target_lang
 
         if self._client is None:
             return self._stub_translate(text, target_lang_name)
@@ -77,6 +82,15 @@ class ContextAwareTranslator:
 
     def _translate_direct(self, text: str, target_lang: str, context: str) -> str:
         """Direct translation without CoT."""
+        # qwen-mt models only support user/assistant roles, not system
+        is_mt_model = "mt" in self.config.translation_model.lower()
+        
+        if is_mt_model:
+            user_prompt = f"将以下中文翻译成{target_lang}：{text}"
+            if context:
+                user_prompt = f"上下文：{context}\n\n将以下中文翻译成{target_lang}：{text}"
+            return self._call_llm("", user_prompt)
+        
         system_prompt = (
             f"You are a professional e-commerce translator. "
             f"Translate the following Chinese text to {target_lang}. "
@@ -98,6 +112,18 @@ class ContextAwareTranslator:
         Step 1: Analyze the text (identify key terms, marketing language, etc.)
         Step 2: Translate with awareness of analysis
         """
+        # qwen-mt models only support user/assistant roles, not system
+        is_mt_model = "mt" in self.config.translation_model.lower()
+        
+        if is_mt_model:
+            # For MT models, use direct translation with context
+            user_prompt = f"将以下中文翻译成{target_lang}：{text}"
+            if context:
+                user_prompt = f"上下文（同一商品图中的其他文本）：{context}\n\n{user_prompt}"
+            if image_context:
+                user_prompt = f"图片描述：{image_context}\n\n{user_prompt}"
+            return self._call_llm("", user_prompt)
+        
         system_prompt = (
             f"You are a professional e-commerce translator specializing in cross-border commerce. "
             f"Your task is to translate Chinese product text to {target_lang}.\n\n"
@@ -159,14 +185,18 @@ class ContextAwareTranslator:
             return self._translate_with_cot(text, target_lang, context, "")
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Call the LLM API."""
+        """Call the LLM API with rate limiting."""
+        import time
         try:
+            # Rate limit: small delay between calls to avoid 429 errors
+            time.sleep(0.8)
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": user_prompt})
             response = self._client.chat.completions.create(
                 model=self.config.translation_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=messages,
                 max_tokens=self.config.translation_max_tokens,
                 temperature=self.config.translation_temperature,
             )

@@ -314,17 +314,22 @@ class TextRenderer:
         # Check if text contains CJK characters
         has_cjk = any('\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' for c in text)
 
-        # Try system fonts
+        # Try system fonts (macOS, Linux, Windows)
         font_paths = []
-        if has_cjk or any(c >= '\u3040' for c in text):
-            # Japanese
-            font_paths.append("C:/Windows/Fonts/meiryo.ttc")
-            font_paths.append("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc")
         if has_cjk:
-            # Chinese
-            font_paths.append("C:/Windows/Fonts/msyh.ttc")
+            # macOS CJK fonts (STHeiti, Hiragino, Songti)
+            font_paths.append("/System/Library/Fonts/STHeiti Medium.ttc")
+            font_paths.append("/System/Library/Fonts/Hiragino Sans GB.ttc")
+            font_paths.append("/System/Library/Fonts/Supplemental/Songti.ttc")
+            font_paths.append("/System/Library/Fonts/AppleSDGothicNeo.ttc")
+            # Linux CJK fonts
             font_paths.append("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc")
-        # Latin fallback
+            font_paths.append("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
+            # Windows CJK fonts
+            font_paths.append("C:/Windows/Fonts/msyh.ttc")
+            font_paths.append("C:/Windows/Fonts/meiryo.ttc")
+        # Latin fallback (macOS, Windows, Linux)
+        font_paths.append("/System/Library/Fonts/Helvetica.ttc")
         font_paths.append("C:/Windows/Fonts/arial.ttf")
         font_paths.append("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 

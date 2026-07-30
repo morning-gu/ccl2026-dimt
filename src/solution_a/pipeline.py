@@ -144,6 +144,9 @@ class SolutionAPipeline:
     ) -> Dict[str, str]:
         """Process one image for all target languages.
 
+        Optimized: OCR, classification, and erasure are language-independent
+        and run only once. Only translation and rendering repeat per language.
+
         Returns:
             Dict mapping language code to output image path.
         """
@@ -151,17 +154,82 @@ class SolutionAPipeline:
         ext = Path(image_path).suffix
         results = {}
 
+        # --- Language-independent steps (run once) ---
+        regions, image = self.ocr.detect_from_path(image_path)
+        logger.info("  OCR: %d text regions detected", len(regions))
+        self.debug.save_original(image, stem)
+        self.debug.save_ocr_vis(image, regions, stem, "all")
+
+        if not regions:
+            import cv2
+            for lang_code in self.config.target_langs:
+                lang_dir = os.path.join(output_dir, lang_code)
+                os.makedirs(lang_dir, exist_ok=True)
+                output_path = os.path.join(lang_dir, f"{stem}{ext}")
+                cv2.imwrite(output_path, image)
+                results[lang_code] = output_path
+            return results
+
+        regions = self.selector.classify_regions(regions)
+        n_translatable = sum(1 for r in regions if r.is_translatable)
+        n_preserved = sum(1 for r in regions if not r.is_translatable)
+        logger.info("  Selective: %d translatable, %d preserved", n_translatable, n_preserved)
+        self.debug.save_classification(regions, stem, "all")
+
+        if n_translatable == 0:
+            import cv2
+            for lang_code in self.config.target_langs:
+                lang_dir = os.path.join(output_dir, lang_code)
+                os.makedirs(lang_dir, exist_ok=True)
+                output_path = os.path.join(lang_dir, f"{stem}{ext}")
+                cv2.imwrite(output_path, image)
+                results[lang_code] = output_path
+            return results
+
+        translatable_regions = [r for r in regions if r.is_translatable]
+        mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
+                                     dilate=self.config.erasure_dilate_pixels)
+        self.debug.save_mask(mask, stem, "all")
+        erased_image = self.eraser.erase(image, translatable_regions)
+        logger.info("  Erasure: %d regions erased", len(translatable_regions))
+        self.debug.save_erased(erased_image, stem, "all")
+
+        # --- Language-dependent steps (run per language) ---
+        import copy
         for lang_code in self.config.target_langs:
             lang_dir = os.path.join(output_dir, lang_code)
             os.makedirs(lang_dir, exist_ok=True)
             output_path = os.path.join(lang_dir, f"{stem}{ext}")
 
             try:
-                result = self.process_single_image(image_path, lang_code, output_path)
-                results[lang_code] = result
+                start_time = time.time()
+                logger.info("  -> %s", lang_code)
+
+                # Deep-copy so translations don't leak across languages
+                lang_regions = copy.deepcopy(regions)
+                lang_translatable = [r for r in lang_regions if r.is_translatable]
+
+                # Translate
+                lang_regions = self.translator.translate_regions(lang_regions, lang_code)
+                logger.info("    Translation: completed for %d regions", n_translatable)
+                self.debug.save_translation(lang_regions, stem, lang_code)
+
+                # Render
+                lang_translatable = [r for r in lang_regions if r.is_translatable]
+                result_image = self.renderer.render(
+                    erased_image, lang_translatable, style_reference=image,
+                )
+                logger.info("    Rendering: completed")
+                self.debug.save_render_result(result_image, stem, lang_code)
+
+                import cv2
+                cv2.imwrite(output_path, result_image)
+                results[lang_code] = output_path
+
+                elapsed = time.time() - start_time
+                logger.info("    Done in %.2fs", elapsed)
             except Exception as e:
                 logger.error("Failed processing %s -> %s: %s", image_path, lang_code, e)
-                # Copy original as fallback
                 import shutil
                 shutil.copy2(image_path, output_path)
                 results[lang_code] = output_path

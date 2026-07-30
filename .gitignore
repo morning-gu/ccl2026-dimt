@@ -22,6 +22,9 @@ outputs/
 # Debug test artifacts
 debug/
 
+# Logs
+logs/
+
 # Model caches
 models/
 *.onnx

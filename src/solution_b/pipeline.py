@@ -180,8 +180,9 @@ class ImageContextAnalyzer:
             img_pil.save(buf, format="JPEG")
             b64 = base64.b64encode(buf.getvalue()).decode()
 
+            vlm_model = getattr(self.config, 'vlm_model', '') or self.config.translation_model
             response = self._client.chat.completions.create(
-                model=self.config.translation_model,
+                model=vlm_model,
                 messages=[
                     {"role": "user", "content": [
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
@@ -206,9 +207,11 @@ class ImageContextAnalyzer:
             return
         try:
             from openai import OpenAI
-            api_base = self.config.translation_api_base or "http://127.0.0.1:8082/v1"
-            api_key = self.config.translation_api_key or "sk-12345679"
+            # Use VLM endpoint if configured, otherwise fall back to translation endpoint
+            api_base = getattr(self.config, 'vlm_api_base', '') or self.config.translation_api_base
+            api_key = getattr(self.config, 'vlm_api_key', '') or self.config.translation_api_key
             self._client = OpenAI(api_key=api_key, base_url=api_base)
+            logger.info("VLM client initialized (base: %s)", api_base)
         except ImportError:
             self._client = None
 
@@ -326,19 +329,105 @@ class SolutionBPipeline:
         image_path: str,
         output_dir: str,
     ) -> Dict[str, str]:
-        """Process one image for all target languages."""
+        """Process one image for all target languages.
+
+        Optimized: OCR, classification, style extraction, VLM context analysis,
+        and erasure are language-independent and run only once.
+        Only translation and rendering repeat per language.
+        """
         stem = Path(image_path).stem
         ext = Path(image_path).suffix
         results = {}
 
+        # --- Language-independent steps (run once) ---
+        regions, image = self.ocr.detect_from_path(image_path)
+        logger.info("  OCR: %d text regions detected", len(regions))
+        self.debug.save_original(image, stem)
+        self.debug.save_ocr_vis(image, regions, stem, "all")
+
+        if not regions:
+            import cv2
+            for lang_code in self.config.target_langs:
+                lang_dir = os.path.join(output_dir, lang_code)
+                os.makedirs(lang_dir, exist_ok=True)
+                output_path = os.path.join(lang_dir, f"{stem}{ext}")
+                cv2.imwrite(output_path, image)
+                results[lang_code] = output_path
+            return results
+
+        # Style extraction (Solution B enhancement)
+        for region in regions:
+            region.style_info = self.style_extractor.extract_style(image, region)
+        logger.info("  Style: extracted for %d regions", len(regions))
+        self.debug.save_style(regions, stem, "all")
+
+        # Selective classification
+        regions = self.selector.classify_regions(regions)
+        n_translatable = sum(1 for r in regions if r.is_translatable)
+        n_preserved = sum(1 for r in regions if not r.is_translatable)
+        logger.info("  Selective: %d translatable, %d preserved", n_translatable, n_preserved)
+        self.debug.save_classification(regions, stem, "all")
+
+        if n_translatable == 0:
+            import cv2
+            for lang_code in self.config.target_langs:
+                lang_dir = os.path.join(output_dir, lang_code)
+                os.makedirs(lang_dir, exist_ok=True)
+                output_path = os.path.join(lang_dir, f"{stem}{ext}")
+                cv2.imwrite(output_path, image)
+                results[lang_code] = output_path
+            return results
+
+        # VLM image context analysis (run once, reused for all languages)
+        image_context = self.context_analyzer.analyze(image)
+        if image_context:
+            logger.info("  Context: %s", image_context[:100])
+        self.debug.save_context_analysis(image_context, stem, "all")
+
+        # Erasure (language-independent)
+        translatable_regions = [r for r in regions if r.is_translatable]
+        mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
+                                     dilate=self.config.erasure_dilate_pixels)
+        self.debug.save_mask(mask, stem, "all")
+        erased_image = self.eraser.erase(image, translatable_regions)
+        logger.info("  Erasure (LaMA): %d regions erased", len(translatable_regions))
+        self.debug.save_erased(erased_image, stem, "all")
+
+        # --- Language-dependent steps (run per language) ---
+        import copy
         for lang_code in self.config.target_langs:
             lang_dir = os.path.join(output_dir, lang_code)
             os.makedirs(lang_dir, exist_ok=True)
             output_path = os.path.join(lang_dir, f"{stem}{ext}")
 
             try:
-                result = self.process_single_image(image_path, lang_code, output_path)
-                results[lang_code] = result
+                start_time = time.time()
+                logger.info("  -> %s", lang_code)
+
+                # Deep-copy so translations don't leak across languages
+                lang_regions = copy.deepcopy(regions)
+
+                # Translate with VLM context
+                lang_regions = self.translator.translate_regions(
+                    lang_regions, lang_code, image_context=image_context
+                )
+                logger.info("    Translation: completed for %d regions", n_translatable)
+                self.debug.save_translation(lang_regions, stem, lang_code)
+
+                # Render
+                lang_translatable = [r for r in lang_regions if r.is_translatable]
+                result_image = self.renderer.render(
+                    erased_image, lang_translatable, style_reference=image,
+                )
+                logger.info("    Rendering: completed")
+                self.debug.save_render_result(result_image, stem, lang_code)
+
+                import cv2
+                cv2.imwrite(output_path, result_image)
+                results[lang_code] = output_path
+
+                elapsed = time.time() - start_time
+                logger.info("    Done in %.2fs", elapsed)
             except Exception as e:
                 logger.error("Failed processing %s -> %s: %s", image_path, lang_code, e)
                 import shutil

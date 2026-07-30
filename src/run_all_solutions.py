@@ -9,6 +9,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ["PYTHONIOENCODING"] = "utf-8"
 sys.stdout.reconfigure(encoding="utf-8")
+# Fix SSL certificate verification on macOS (uv-managed Python)
+if "SSL_CERT_FILE" not in os.environ:
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        pass
 sys.stderr.reconfigure(encoding="utf-8")
 
 from common.config import PipelineConfig, TARGET_LANGUAGES
@@ -30,9 +37,9 @@ def get_config(solution_name):
         input_dir=INPUT_DIR,
         output_dir=os.path.join(OUTPUT_BASE, f"results_{solution_name}"),
         target_langs=["en", "es", "pt", "ja", "fr"],
-        translation_model="GLM-5.1",
-        translation_api_base="http://127.0.0.1:8082/v1",
-        translation_api_key="sk-12345679",
+        translation_model="qwen-mt-plus",
+        translation_api_base="https://llm-a2uwnqapvtxla90o.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        translation_api_key="sk-ws-H.EIPLMYD.NCt4.MEUCIB-zvDx6krzyVfQO5i9yY67VGOih5BnjwN-0sCOc75zfAiEA9pc3naJ3ShMr2xuSU3I02khYYzMlDKoxHNlVnmTEqnY",
         translation_use_cot=True,
         device="cpu",
         batch_size=1,
@@ -63,7 +70,7 @@ def get_config(solution_name):
         cfg.erasure_model = "opencv"
     return cfg
 
-def run_solution(solution_name, max_images=0):
+def run_solution(solution_name, max_images=0, skip_existing=False):
     logger.info("=" * 60)
     logger.info("Running %s", solution_name.upper())
     logger.info("=" * 60)
@@ -82,6 +89,25 @@ def run_solution(solution_name, max_images=0):
     image_files = sorted(input_path.glob("*.jpg"))
     if max_images > 0:
         image_files = image_files[:max_images]
+    # Skip images that already have all language outputs
+    if skip_existing:
+        original_count = len(image_files)
+        filtered = []
+        for img_path in image_files:
+            all_exist = True
+            for lang_code in cfg.target_langs:
+                lang_dir = os.path.join(cfg.output_dir, lang_code)
+                out_path = os.path.join(lang_dir, img_path.name)
+                if not os.path.exists(out_path):
+                    all_exist = False
+                    break
+            if not all_exist:
+                filtered.append(img_path)
+        skipped = original_count - len(filtered)
+        if skipped > 0:
+            logger.info("Skipping %d already-processed images", skipped)
+        image_files = filtered
+
     logger.info("Processing %d images x %d languages with %s", len(image_files), len(cfg.target_langs), solution_name)
     start_time = time.time()
     all_results = {}
@@ -117,7 +143,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--solution", choices=["solution_a", "solution_b", "solution_c", "all"], default="all")
     parser.add_argument("--max_images", type=int, default=0)
+    parser.add_argument("--skip_existing", action="store_true", help="Skip images that already have output")
     args = parser.parse_args()
     solutions = ["solution_a", "solution_b", "solution_c"] if args.solution == "all" else [args.solution]
     for sol in solutions:
-        run_solution(sol, max_images=args.max_images)
+        run_solution(sol, max_images=args.max_images, skip_existing=args.skip_existing)
