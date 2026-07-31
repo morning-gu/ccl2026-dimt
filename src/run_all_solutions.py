@@ -5,7 +5,6 @@ import sys
 import time
 import logging
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ["PYTHONIOENCODING"] = "utf-8"
 sys.stdout.reconfigure(encoding="utf-8")
@@ -17,22 +16,18 @@ if "SSL_CERT_FILE" not in os.environ:
     except ImportError:
         pass
 sys.stderr.reconfigure(encoding="utf-8")
-
 from common.config import PipelineConfig, TARGET_LANGUAGES
 from common.config import load_config_from_env
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("run_all")
-
 # Resolve project root relative to this script
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 INPUT_DIR = str(_PROJECT_ROOT / "dataset" / "source_images")
 OUTPUT_BASE = str(_PROJECT_ROOT / "outputs")
-
 def get_config(solution_name):
     cfg = PipelineConfig(
         input_dir=INPUT_DIR,
@@ -45,15 +40,26 @@ def get_config(solution_name):
     # Solution-specific backends (NOT configurable via env vars).
     #
     # Design intent (see README):
-    #   A: SD inpainting erasure + AnyText2 rendering (AnyTrans-faithful)
+    #   A: PERT stroke-level erasure + AnyText2 rendering (AnyTrans-faithful)
     #   B: LaMA erasure + AnyText2 rendering + VLM context (highest quality)
     #   C: OpenCV erasure + PIL rendering (fast, no GPU)
     #
-    # Heavy backends (anytext2/lama/sd_inpaint) raise if deps are missing;
+    # Heavy backends (anytext2/lama/pert) raise if deps are missing;
     # there is no silent fallback to PIL/OpenCV.
     if solution_name == "solution_a":
         cfg.render_model = "anytext2"
-        cfg.erasure_model = "sd_inpaint"
+        # PERT = stroke-level scene text removal (AnyTrans Section 3.3).
+        # Falls back to sd_inpaint if PERT_REPO/PERT_CKPT not set.
+        import os as _os
+        if _os.environ.get("PERT_REPO") and _os.environ.get("PERT_CKPT"):
+            cfg.erasure_model = "pert"
+        else:
+            cfg.erasure_model = "sd_inpaint"
+            logger.warning(
+                "PERT_REPO/PERT_CKPT not set; using sd_inpaint fallback. "
+                "For AnyTrans-faithful stroke-level erasure, clone "
+                "https://github.com/wangyuxin87/PERT and set PERT_REPO/PERT_CKPT."
+            )
     elif solution_name == "solution_b":
         cfg.render_model = "anytext2"
         cfg.erasure_model = "lama"
@@ -63,7 +69,6 @@ def get_config(solution_name):
         cfg.render_model = "pil"
         cfg.erasure_model = "opencv"
     return cfg
-
 def run_solution(solution_name, max_images=0, skip_existing=False):
     logger.info("=" * 60)
     logger.info("Running %s", solution_name.upper())
@@ -101,7 +106,6 @@ def run_solution(solution_name, max_images=0, skip_existing=False):
         if skipped > 0:
             logger.info("Skipping %d already-processed images", skipped)
         image_files = filtered
-
     logger.info("Processing %d images x %d languages with %s", len(image_files), len(cfg.target_langs), solution_name)
     start_time = time.time()
     all_results = {}
@@ -131,7 +135,6 @@ def run_solution(solution_name, max_images=0, skip_existing=False):
     except Exception as e:
         logger.error("Packaging failed: %s", e)
     return all_results
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()

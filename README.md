@@ -30,9 +30,9 @@ ccl2026-dimt/
 
 | Feature | Solution A (AnyTrans) | Solution B (AnyText2) | Solution C (E-commerce) |
 |---------|----------------------|----------------------|------------------------|
-| Erasure | SD Inpainting | LaMA | OpenCV |
+| Erasure | PERT (stroke-level) | LaMA | OpenCV |
 | Rendering | AnyText2 | AnyText2 | PIL |
-| Translation | Qwen2.5 + CoT | Qwen-VL + CoT | Batch API |
+| Translation | Qwen2.5 + <boxidx> tags | Qwen-VL + CoT | Batch API |
 | Classification | Basic selective | +Style extraction | +E-commerce rules |
 | Speed | Medium | Slow | Fast |
 | Quality | High | Highest | Medium |

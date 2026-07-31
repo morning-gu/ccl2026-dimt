@@ -1,61 +1,57 @@
 """Text erasure and rendering, single-backend per solution (no degradation).
-
 Each solution pins one erasure backend and one render backend via config:
-  Solution A (AnyTrans):  erasure=sd_inpaint  render=anytext2
-  Solution B (AnyText2):  erasure=lama        render=anytext2
-  Solution C (e-commerce):erasure=opencv     render=pil
-
+    Solution A (AnyTrans):  erasure=sd_inpaint  render=anytext2
+    Solution B (AnyText2):  erasure=lama        render=anytext2
+    Solution C (e-commerce):erasure=opencv     render=pil
 A missing dependency raises immediately instead of silently falling back to a
 weaker method. PIL rendering is Solution C's own method (not a fallback).
 """
 import logging
 from typing import List, Optional, Tuple
 import numpy as np
-
 from .config import PipelineConfig
 from .selective_translator import TextRegion
-
 logger = logging.getLogger(__name__)
-
 _font_manager = None  # lazy global so the FontManager is created only once
-
-
 def _get_font_manager():
     global _font_manager
     if _font_manager is None:
         from .font_manager import FontManager
         _font_manager = FontManager()
     return _font_manager
-
-
 class TextEraser:
     """Erase text from images while preserving background. Single backend, no fallback.
-
     Backends (by config.erasure_model):
-      "lama"      : simple-lama-inpainting (Solution B). AnyTrans uses
+        "pert"     : PERT scene text removal (wangyuxin87/PERT, TIP 2023).
+                    Takes the full image and iteratively erases all text
+                    strokes (3-stage cascade). Pretrained weights available
+                    on Google Drive. This is the closest open-source
+                    approximation of the stroke-level text erasure
+                    (Li et al. 2023) used in the AnyTrans paper. After
+                    erasure, preserved (brand/logo) regions are restored
+                    from the original image.
+        "lama"      : simple-lama-inpainting (Solution B). AnyTrans uses
                     stroke-level erasure (Li et al. 2023), which is not
                     open-sourced; LaMA is the documented eraser here.
-      "sd_inpaint": diffusers StableDiffusionInpaintPipeline (Solution A),
+        "sd_inpaint": diffusers StableDiffusionInpaintPipeline (Solution A),
                     used for background restoration only.
-      "opencv"    : cv2.inpaint Telea (Solution C, e-commerce fast path).
-      "strokenet" : the cascaded stroke-level erasure used in the AnyTrans
+        "opencv"    : cv2.inpaint Telea (Solution C, e-commerce fast path).
+        "strokenet" : the cascaded stroke-level erasure used in the AnyTrans
                     paper (STRNet from ZeroAct/SceneTextRemover-pytorch,
                     a reimplementation of the cited stroke-level text erasure).
     """
-
     def __init__(self, config: PipelineConfig):
         self.config = config
         self._lama_model = None
         self._sd_pipeline = None
         self._strokenet = None
+        self._pert_model = None
         self._backend = config.erasure_model
-
     def _init_lama(self):
         """Initialize LaMA. Raises if simple-lama-inpainting is not installed."""
         from simple_lama_inpainting import SimpleLAMA
         self._lama_model = SimpleLAMA()
         logger.info("LaMA erasure model initialized")
-
     def _init_sd_inpaint(self):
         """Initialize SD inpainting for background restoration. Raises if
         diffusers/torch are missing or the model cannot be loaded."""
@@ -69,10 +65,8 @@ class TextEraser:
         if self.config.device == "cuda":
             self._sd_pipeline = self._sd_pipeline.to("cuda")
         logger.info("SD inpainting erasure backend initialized")
-
     def _init_strokenet(self):
         """Initialize the cascaded stroke-level erasure model (STRNet).
-
         Clone https://github.com/ZeroAct/SceneTextRemover-pytorch and set
         STROKENET_REPO=/path/to/that/repo and STROKENET_CKPT=/path/to/weights.pth
         (the repo ships only training code; you must train or supply a
@@ -97,7 +91,42 @@ class TextEraser:
         if self.config.device == "cuda":
             self._strokenet = self._strokenet.cuda()
         logger.info("STRNet (stroke-level erasure) initialized from %s", ckpt)
-
+    def _init_pert(self):
+        """Initialize PERT scene text removal model.
+        Clone https://github.com/wangyuxin87/PERT and download the pretrained
+        model from Google Drive:
+            git clone https://github.com/wangyuxin87/PERT /path/PERT
+            # Download net_epoch_200.pth from the Google Drive link in README
+        Then set:
+            PERT_REPO=/path/PERT
+            PERT_CKPT=/path/PERT/net_epoch_200.pth
+        Raises if either is missing.
+        """
+        import os, sys
+        import torch
+        repo = os.environ.get("PERT_REPO", "")
+        if not repo:
+            raise RuntimeError(
+                "PERT_REPO not set. Clone https://github.com/wangyuxin87/PERT "
+                "and set PERT_REPO=/path/to/PERT to use stroke-level erasure."
+            )
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from networks_sfnet import Pert  # type: ignore
+        self._pert_model = Pert(use_GPU=(self.config.device == "cuda"))
+        ckpt = os.environ.get("PERT_CKPT", "")
+        if not ckpt:
+            raise RuntimeError(
+                "PERT_CKPT not set. Download pretrained weights from "
+                "https://drive.google.com/file/d/1uU8lGUIp62W5HkwyjzY3Mc15O0-_jkKP "
+                "and set PERT_CKPT=/path/to/net_epoch_200.pth"
+            )
+        state_dict = torch.load(ckpt, map_location="cpu")
+        self._pert_model.load_state_dict(state_dict, strict=True)
+        self._pert_model.eval()
+        if self.config.device == "cuda":
+            self._pert_model = self._pert_model.cuda()
+        logger.info("PERT (scene text removal) initialized from %s", ckpt)
     def erase(self, image, regions, dilate_pixels=0):
         if not regions:
             return image
@@ -108,6 +137,8 @@ class TextEraser:
             self._init_sd_inpaint()
         elif self._backend == "strokenet" and self._strokenet is None:
             self._init_strokenet()
+        elif self._backend == "pert" and self._pert_model is None:
+            self._init_pert()
         mask = self._build_mask(image.shape[:2], regions, dilate_pixels or self.config.erasure_dilate_pixels)
         if self._backend == "lama":
             return self._erase_lama(image, mask)
@@ -117,8 +148,9 @@ class TextEraser:
             return self._erase_opencv(image, mask)
         if self._backend == "strokenet":
             return self._erase_strokenet(image, mask)
+        if self._backend == "pert":
+            return self._erase_pert(image, mask)
         raise ValueError(f"Unknown erasure_model: {self._backend!r}")
-
     def _build_mask(self, shape, regions, dilate):
         h, w = shape
         mask = np.zeros((h, w), dtype=np.uint8)
@@ -129,12 +161,10 @@ class TextEraser:
             y2 = min(h, int(region.bbox[3]) + dilate)
             mask[y1:y2, x1:x2] = 255
         return mask
-
     def _erase_lama(self, image, mask):
         from PIL import Image
         result = self._lama_model(Image.fromarray(image), Image.fromarray(mask))
         return np.array(result)
-
     def _erase_sd(self, image, mask):
         import torch
         from PIL import Image
@@ -151,14 +181,11 @@ class TextEraser:
         if image.ndim == result.ndim and image.shape[:2] == result.shape[:2]:
             result[keep] = image[keep]
         return result
-
     def _erase_opencv(self, image, mask):
         import cv2
         return cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
-
     def _erase_strokenet(self, image, mask):
         """Erase via the cascaded stroke-level STRNet.
-
         STRNet.forward(I, Mm) -> (Ms, Ite, Ms_, Ite_). Ite_ (the output of the
         final G'r stage) is the erased image. Inputs are the image tensor
         (B,3,H,W) in [0,1] and the text-region mask (B,1,H,W) in {0,1}.
@@ -180,30 +207,59 @@ class TextEraser:
         if image.ndim == out.ndim and image.shape[:2] == out.shape[:2]:
             out[keep] = image[keep]
         return out
-
-
+    def _erase_pert(self, image, mask):
+        """Erase text via PERT (scene text removal, TIP 2023).
+        PERT takes the full image and iteratively erases all text strokes
+        (3-stage cascade). Unlike STRNet/SD-inpaint, it does not accept a
+        mask -- it detects text itself. To support selective erasure, we
+        run PERT on the full image, then restore non-translatable regions
+        from the original using the caller's mask.
+        """
+        import torch
+        from torch.autograd import Variable
+        h, w = image.shape[:2]
+        dev = next(self._pert_model.parameters()).device
+        # PERT expects RGB float [0,1], NCHW, dimensions multiple of 32
+        h_pad = h + (32 - h % 32) % 32
+        w_pad = w + (32 - w % 32) % 32
+        img_rgb = image[..., ::-1].copy()  # BGR -> RGB
+        if h_pad != h or w_pad != w:
+            import cv2
+            img_rgb = cv2.resize(img_rgb, (w_pad, h_pad))
+        img_t = torch.from_numpy(img_rgb.astype("float32") / 255.0)
+        img_t = img_t.permute(2, 0, 1).unsqueeze(0).to(dev)
+        with torch.no_grad():
+            out, _, _, _, _ = self._pert_model(img_t)
+        out = out[0].clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+        out = (out * 255).astype("uint8")
+        if h_pad != h or w_pad != w:
+            import cv2
+            out = cv2.resize(out, (w, h))
+        out = out[..., ::-1]  # RGB -> BGR
+        # Restore non-translatable regions (brand/logo/spec text) from
+        # the original so preserved text is bit-exact.
+        keep = mask == 0
+        if image.ndim == out.ndim and image.shape[:2] == out.shape[:2]:
+            out[keep] = image[keep]
+        return out
 class TextRenderer:
     """Render translated text. Single backend per solution, no degradation.
-
     Backends (by config.render_model):
-      "anytext2": the AnyText2 pipeline (tyxsspa/AnyText2). Required for
-                  Solutions A and B. Raises if AnyText2 is not installed.
-      "pil"     : Pillow-based rendering (Solution C's own method). Style
-                  info (color/font/weight/alignment) is preserved and, when
-                  a style_reference is given, extracted on the fly.
+        "anytext2": the AnyText2 pipeline (tyxsspa/AnyText2). Required for
+                    Solutions A and B. Raises if AnyText2 is not installed.
+        "pil"     : Pillow-based rendering (Solution C's own method). Style
+                    info (color/font/weight/alignment) is preserved and, when
+                    a style_reference is given, extracted on the fly.
     """
-
     def __init__(self, config: PipelineConfig):
         self.config = config
         self._anytext2 = None
         self._backend = config.render_model
-
     def _init_anytext2(self):
         """Initialize AnyText2.
-
         Clone https://github.com/tyxsspa/AnyText2 and install its deps first:
-          git clone https://github.com/tyxsspa/AnyText2 /path/AnyText2
-          pip install -r /path/AnyText2/requirements.txt
+            git clone https://github.com/tyxsspa/AnyText2 /path/AnyText2
+            pip install -r /path/AnyText2/requirements.txt
         Then set ANYTEXT2_MODEL_PATH=/path/AnyText2 (repo root contains
         ms_wrapper.py and the models/ checkpoint dir). Raises otherwise.
         """
@@ -228,7 +284,6 @@ class TextRenderer:
             self._anytext2 = self._anytext2.cuda(0)
         self._anytext2_repo = repo
         logger.info("AnyText2 model initialized from %s", repo)
-
     def render(self, image, regions, style_reference=None):
         if not regions:
             return image
@@ -242,10 +297,8 @@ class TextRenderer:
         if self._backend == "pil":
             return self._render_pil(image, render_regions, style_reference)
         raise ValueError(f"Unknown render_model: {self._backend!r}")
-
     def _render_anytext2(self, image, regions, style_reference):
         """Call the real AnyText2 pipeline in edit mode.
-
         AnyText2 expects: an image, the translated text (one string per line,
         separated by '#'), a draw_pos position mask marking where text goes,
         and a params dict. We build all of these from the regions. Any failure
@@ -273,7 +326,7 @@ class TextRenderer:
         text_colors = " ".join(color_parts)
         params = {
             "mode": "edit",
-            "sort_priority": "↕↓→",
+            "sort_priority": "↔↕",  # AnyText2 valid: ↔↕ (horizontal-first) or ↕↔ (vertical-first),
             "show_debug": False,
             "revise_pos": False,
             "image_count": 1,
@@ -282,13 +335,13 @@ class TextRenderer:
             "image_height": h,
             "strength": 1.0,
             "attnx_scale": 1.0,
-            "font_hollow": False,
-            "cfg_scale": 7.5,
+            "font_hollow": None,  # AnyText2 API expects None, not False
+            "cfg_scale": 9.0,  # aligned to AnyText2 default (was 7.5)
             "eta": 0.0,
-            "a_prompt": "best quality, extremely detailed, 4k",
-            "n_prompt": "low-res, bad anatomy, extra digit, fewer digits, cropped, worst quality, low quality, bad hands, deformed, missing fingers, extra fingers",
+            "a_prompt": "best quality, extremely detailed,4k, HD, supper legible text,  clear text edges,  clear strokes, neat writing, no watermarks",  # aligned to AnyText2 ms_wrapper default
+            "n_prompt": "low-res, bad anatomy, extra digit, fewer digits, cropped, worst quality, low quality, watermark, unreadable text, messy words, distorted text, disorganized writing, advertising picture",  # aligned to AnyText2 ms_wrapper default
             "base_model_path": "",
-            "lora_path_ratio": [],
+            "lora_path_ratio": "",  # AnyText2 expects str, not list
             "glyline_font_path": ["None"] * len(regions),
             "font_hint_image": [None] * len(regions),
             "font_hint_mask": [None] * len(regions),
@@ -305,9 +358,7 @@ class TextRenderer:
         if rtn_code < 0 or not results:
             raise RuntimeError(f"AnyText2 rendering failed (rtn_code={rtn_code}): {rtn_warning}")
         return np.array(results[0])[..., ::-1]  # RGB->BGR
-
     # ---- PIL renderer (Solution C's method) ----
-
     def _render_pil(self, image, regions, style_reference=None):
         from PIL import Image, ImageDraw
         img_pil = Image.fromarray(image)
@@ -317,7 +368,6 @@ class TextRenderer:
                 region.style_info = _PilStyleHelper.enrich(region.style_info, style_reference, region)
             self._draw_single(draw, img_pil, region)
         return np.array(img_pil)
-
     def _draw_single(self, draw, img_pil, region):
         from PIL import ImageFont
         x1, y1, x2, y2 = [int(v) for v in region.bbox[:4]]
@@ -349,7 +399,6 @@ class TextRenderer:
                 tx = x1 + max(0, (box_w - ln_w) // 2)
             draw.text((tx, ty), ln, font=font, fill=fill_color)
             ty += line_h
-
     def _fit_font_size(self, draw, text, size, box_w, box_h):
         size = max(10, size)
         for _ in range(12):
@@ -364,7 +413,6 @@ class TextRenderer:
                 return 10
             size = max(10, int(size * 0.9))
         return size
-
     def _wrap_text(self, text, font, max_width):
         from PIL import Image, ImageDraw
         tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
@@ -398,16 +446,12 @@ class TextRenderer:
             if cur:
                 final.append(cur)
         return final or [text]
-
     def _load_font(self, size, text, weight=None):
         from PIL import ImageFont
         bold = (weight == "bold")
         return _get_font_manager().load_font(size, text, bold)
-
-
 class _PilStyleHelper:
     """On-the-fly style extraction for the PIL renderer (Solution C)."""
-
     @staticmethod
     def enrich(style_info, image, region):
         style = dict(style_info or {})
@@ -427,7 +471,6 @@ class _PilStyleHelper:
         except Exception:
             pass
         return style
-
     @staticmethod
     def _text_color(roi):
         try:

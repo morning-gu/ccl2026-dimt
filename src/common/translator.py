@@ -220,6 +220,10 @@ class ContextAwareTranslator:
     ) -> List[TextRegion]:
         """Translate all translatable regions in one batched API call.
 
+        Uses the AnyTrans <boxidx></boxidx> tag format with few-shot
+        demonstrations to preserve positional information and enable
+        context-aware translation (AnyTrans Section 3.2).
+
         Preserved regions are left unchanged.
         """
         # Build context from all text in the image
@@ -236,33 +240,50 @@ class ContextAwareTranslator:
         lang_info = self._lang_map.get(target_lang)
         target_lang_name = lang_info.qwen_lang if lang_info else target_lang
 
-        # Build numbered text list for the prompt
-        lines = []
-        for i, r in enumerate(translatable):
-            lines.append(f"[{i+1}] {r.text}")
-        numbered_text = "\n".join(lines)
+        # --- AnyTrans <boxidx></boxidx> tag format (Section 3.2) ---
+        # Concatenate all translatable texts using HTML-style box tags to
+        # preserve positional info. The LLM translates the whole sequence
+        # and outputs in the same tag format, maintaining word order.
+        src_tagged = "".join(
+            f"<box{i+1}>{r.text}</box{i+1}>" for i, r in enumerate(translatable)
+        )
+
+        # Few-shot demonstrations (5-shot, AnyTrans uses 5-shot per language pair)
+        few_shot_examples = self._build_few_shot_examples(target_lang_name)
 
         system_prompt = (
             f"You are a professional e-commerce translator. "
-            f"Translate the following numbered Chinese text lines to {target_lang_name}.\n"
+            f"Translate Chinese text to {target_lang_name}.\n"
             f"Rules:\n"
             f"- Preserve brand names, product codes, specifications as-is\n"
             f"- Adapt marketing tone to be natural in {target_lang_name}\n"
-            f"- Output EXACTLY the same number of lines, each prefixed with the same [number]\n"
-            f"- Output format: [1] translation1\\n[2] translation2\\n..."
+            f"- Keep the <boxN></boxN> tag format in the output, with each "
+            f"box containing the translated text for that region\n"
+            f"- Output ONLY the tagged translation, nothing else"
         )
-        parts = [f"Texts to translate:\n{numbered_text}"]
+
+        parts = [few_shot_examples, f"\nTranslate the following to {target_lang_name}:"]
+        parts.append(f"Chinese: {src_tagged}")
+        parts.append(f"{target_lang_name}:")
         if all_text:
-            parts.append(f"\nFull image context: {all_text[:500]}")
+            parts.append(f"\n(Full image context: {all_text[:500]})")
         if image_context:
-            parts.append(f"\nImage description: {image_context}")
+            parts.append(f"\n(Image description: {image_context})")
         user_prompt = "\n".join(parts)
 
         raw = self._call_llm(system_prompt, user_prompt)
 
-        # Parse numbered results
+        # Parse <boxN>...</boxN> results
         results_map = {}
         if raw:
+            import re
+            for m in re.finditer(r'<box(\d+)>(.*?)</box\1>', raw, re.DOTALL):
+                idx = int(m.group(1))
+                text = m.group(2).strip()
+                results_map[idx] = text
+
+        # Fallback: try numbered [N] format if box tags failed
+        if not results_map and raw:
             import re
             for m in re.finditer(r'\[(\d+)\]\s*(.+?)(?=\n\[|\Z)', raw, re.DOTALL):
                 idx = int(m.group(1))
@@ -279,6 +300,46 @@ class ContextAwareTranslator:
                 r.translated_text = r.text
 
         return regions
+
+    def _build_few_shot_examples(self, target_lang_name: str) -> str:
+        """Build 5-shot demonstrations for the AnyTrans translation prompt.
+
+        Uses generic e-commerce examples that show the <boxN></boxN> format.
+        The examples teach the LLM to:
+        1. Keep the tag format
+        2. Translate contextually (not box-by-box isolation)
+        3. Reorder words when the target language requires it
+        """
+        # Language-specific examples (zh->en shown; others use the same
+        # structure with target language name substituted)
+        examples = [
+            # Example 1: product name + slogan (context helps disambiguate)
+            ('<box1>限时</box1><box2>特惠</box2>',
+             '<box1>Limited</box1><box2>Time Offer</box2>'),
+            # Example 2: brand preservation
+            ('<box1>华为</box1><box2>手机</box2>',
+             '<box1>Huawei</box1><box2>Phone</box2>'),
+            # Example 3: spec preservation
+            ('<box1>256GB</box1><box2>存储</box2>',
+             '<box1>256GB</box1><box2>Storage</box2>'),
+            # Example 4: word reordering (Chinese -> English)
+            ('<box1>无线</box1><box2>蓝牙耳机</box2>',
+             '<box1>Wireless</box1><box2>Bluetooth Earphone</box2>'),
+            # Example 5: marketing text cultural adaptation
+            ('<box1>新品上市</box1><box2>买一送一</box2>',
+             '<box1>New Arrival</box1><box2>Buy One Get One Free</box2>'),
+        ]
+
+        # For non-English targets, we still show the format with English
+        # as a structural template (the LLM generalizes to the target language)
+        lines = ["Here are some examples of the translation format:"]
+        for i, (src, tgt) in enumerate(examples):
+            lines.append(f"Chinese: {src}")
+            lines.append(f"English: {tgt}")
+            lines.append("")
+
+        lines.append(f"Now translate to {target_lang_name} using the same <boxN></boxN> format.")
+        return "\n".join(lines)
 
     def translate_regions_batch(
         self,

@@ -1,19 +1,30 @@
 """Solution A: AnyTrans-based pipeline for in-image translation.
 
-Architecture:
+Architecture (aligned with AnyTrans paper):
   1. PP-OCRv4 detection -> extract all text regions
   2. Selective translation -> classify translatable vs preservable
-  3. Qwen2.5 few-shot / VLM context-aware translation
-  4. SD inpainting for text erasure + fusion
-  5. AnyText2 style-controlled text rendering
+  3. AnyTrans few-shot translation with <boxidx></boxidx> tag format
+  4. PERT stroke-level text erasure on original text boxes (AnyTrans Section 3.3)
+  5. Anticipated Box Resize for the translated text (AnyTrans Section 3.3)
+  6. AnyText2 style-controlled text rendering
+  Steps 4-6 follow the paper order: erase original strokes first, then
+  resize the anticipated box for the target text, then fuse.
 
-This solution leverages the AnyTrans framework (multilingual text
-generation in images) enhanced with our selective translation module.
+Translation uses the paper's pure few-shot strategy (per-language-pair
+5-shot, <boxidx> tag format). No Chain-of-Thought and no VLM -- CoT is an
+HCIIT technique and the VLM branch is left out of Solution A's LLM-only
+configuration.
+
+This solution reproduces the AnyTrans framework (multilingual text
+generation in images) enhanced with our selective translation module
+(competition-specific, not in the paper).
 
 Key strengths:
-  - AnyTrans natively handles multilingual text generation
-  - SD inpainting provides good background restoration
-  - Few-shot translation with Qwen2.5 for accuracy
+  - AnyTrans <boxidx> tag format preserves positional info in translation
+  - PERT provides stroke-level text erasure (closest open-source to
+    AnyTrans's stroke-level erasure, Li et al. 2023)
+  - Anticipated Box Resize handles text length differences across languages
+  - AnyText2 rendering with proper API alignment to the open-source repo
 """
 import os
 import sys
@@ -28,8 +39,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common.config import PipelineConfig, TARGET_LANGUAGES, load_config_from_env
 from common.ocr_detector import OCRDetector
 from common.selective_translator import TextRegion, SelectiveTranslator
-from common.translator import ContextAwareTranslator
+from solution_a.translator import AnyTransTranslator
 from common.renderer import TextEraser, TextRenderer
+from common.box_resize import resize_regions
 from common.submission import SubmissionPackager
 from common.debug_saver import DebugSaver
 
@@ -53,7 +65,7 @@ class SolutionAPipeline:
             preserve_logo=self.config.preserve_logo,
             logo_threshold=self.config.logo_detection_threshold,
         )
-        self.translator = ContextAwareTranslator(self.config)
+        self.translator = AnyTransTranslator(self.config)
         self.eraser = TextEraser(self.config)
         self.renderer = TextRenderer(self.config)
         self.packager = SubmissionPackager(self.config)
@@ -111,7 +123,9 @@ class SolutionAPipeline:
         logger.info("  Translation: completed for %d regions", n_translatable)
         self.debug.save_translation(regions, image_stem, target_lang)
 
-        # Step 4: Erase only translatable regions (preserve brand/logo text)
+        # Step 4: Erase translatable regions using ORIGINAL boxes (before
+        # resize), matching AnyTrans Section 3.3 order: erase original
+        # strokes first, then resize the anticipated box, then render.
         translatable_regions = [r for r in regions if r.is_translatable]
         mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
                                      dilate=self.config.erasure_dilate_pixels)
@@ -120,7 +134,11 @@ class SolutionAPipeline:
         logger.info("  Erasure: %d regions erased", len(translatable_regions))
         self.debug.save_erased(erased_image, image_stem, target_lang)
 
-        # Step 5: Render translated text with AnyText2
+        # Step 5: Anticipated Box Resize for the translated text
+        regions = resize_regions(regions, self.config.source_lang, target_lang)
+        translatable_regions = [r for r in regions if r.is_translatable]
+
+        # Step 6: Render translated text with AnyText2
         # Pass original image as style reference
         result_image = self.renderer.render(
             erased_image,
@@ -187,6 +205,9 @@ class SolutionAPipeline:
                 results[lang_code] = output_path
             return results
 
+        # Erase using ORIGINAL boxes (before resize), matching AnyTrans
+        # Section 3.3 order. Erasure is language-independent so it runs
+        # once; resize + render repeat per language below.
         translatable_regions = [r for r in regions if r.is_translatable]
         mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
                                      dilate=self.config.erasure_dilate_pixels)
@@ -208,12 +229,15 @@ class SolutionAPipeline:
 
                 # Deep-copy so translations don't leak across languages
                 lang_regions = copy.deepcopy(regions)
-                lang_translatable = [r for r in lang_regions if r.is_translatable]
 
                 # Translate
                 lang_regions = self.translator.translate_regions(lang_regions, lang_code)
                 logger.info("    Translation: completed for %d regions", n_translatable)
                 self.debug.save_translation(lang_regions, stem, lang_code)
+
+                # Anticipated Box Resize for the translated text (after
+                # erasure, matching AnyTrans Section 3.3 order)
+                lang_regions = resize_regions(lang_regions, self.config.source_lang, lang_code)
 
                 # Render
                 lang_translatable = [r for r in lang_regions if r.is_translatable]

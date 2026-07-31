@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def _glob_fonts(directory: str) -> List[str]:
 
 
 class FontManager:
-    """Cross-platform, script-aware font resolver with caching.
+    """Cross-platform, script-aware font resolver.
 
     Search order: bundled fonts -> system fonts -> PIL default.
     """
@@ -106,7 +106,6 @@ class FontManager:
     }
 
     def __init__(self):
-        self._cache: Dict[Tuple[int, str, bool], object] = {}
         self._bundled_index: Dict[str, str] = {}
         self._system_index: Optional[List[str]] = None
         self._build_bundled_index()
@@ -133,13 +132,11 @@ class FontManager:
         return fonts
 
     def load_font(self, size: int, text: str = "", bold: bool = False):
-        from PIL import ImageFont
-        cache_key = (size, _detect_script(text), bold)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        font = self._resolve(size, text, bold)
-        self._cache[cache_key] = font
-        return font
+        # Intentionally uncached: box-height-derived sizes are nearly all
+        # unique (near-0 hit rate), and each cached ImageFont owns C
+        # glyph-bitmap memory that caused OOM (~image 499). PIL caches the
+        # FreeType face handle internally, so recreating a font is cheap.
+        return self._resolve(size, text, bold)
 
     def _resolve(self, size: int, text: str, bold: bool):
         from PIL import ImageFont
