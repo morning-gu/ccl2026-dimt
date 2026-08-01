@@ -16,7 +16,7 @@ ccl2026-dimt/
       renderer.py         # Text erasure + rendering (LaMA/AnyText2/PIL)
       submission.py       # Submission packaging
     solution_a/           # Solution A: AnyTrans pipeline
-    solution_b/           # Solution B: AnyText2 high-quality rendering
+    solution_b/           # Solution B: HCIIT two-stage pipeline
     solution_c/           # Solution C: E-commerce optimized batch processing
     run_all_solutions.py  # Run all solutions
   docs/                   # Analysis documents
@@ -28,12 +28,13 @@ ccl2026-dimt/
 
 ## Three Solutions
 
-| Feature | Solution A (AnyTrans) | Solution B (AnyText2) | Solution C (E-commerce) |
-|---------|----------------------|----------------------|------------------------|
+| Feature | Solution A (AnyTrans) | Solution B (HCIIT) | Solution C (E-commerce) |
+|---------|----------------------|---------------------|------------------------|
 | Erasure | PERT (stroke-level) | LaMA | OpenCV |
-| Rendering | AnyText2 | AnyText2 | PIL |
-| Translation | Qwen2.5 + <boxidx> tags | Qwen-VL + CoT | Batch API |
-| Classification | Basic selective | +Style extraction | +E-commerce rules |
+| Rendering | AnyText2 | AnyText2 (style-conditioned) | PIL |
+| Translation | Qwen2.5 + <boxidx> tags | MMLLM + 4-step CoT | Batch API |
+| Consistency | - | Translation + Image Gen | - |
+| Classification | Basic selective | +Style latent extraction | +E-commerce rules |
 | Speed | Medium | Slow | Fast |
 | Quality | High | Highest | Medium |
 

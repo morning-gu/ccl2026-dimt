@@ -41,7 +41,7 @@ def get_config(solution_name):
     #
     # Design intent (see README):
     #   A: PERT stroke-level erasure + AnyText2 rendering (AnyTrans-faithful)
-    #   B: LaMA erasure + AnyText2 rendering + VLM context (highest quality)
+    #   B: HCIIT two-stage: MMLLM 4-step CoT + LaMA erasure + AnyText2 backfill
     #   C: OpenCV erasure + PIL rendering (fast, no GPU)
     #
     # Heavy backends (anytext2/lama/pert) raise if deps are missing;
@@ -61,10 +61,24 @@ def get_config(solution_name):
                 "https://github.com/wangyuxin87/PERT and set PERT_REPO/PERT_CKPT."
             )
     elif solution_name == "solution_b":
+        # HCIIT two-stage framework (Fu et al.)
+        # Stage 1: MMLLM 4-step CoT translation (translation consistency)
+        # Stage 2: LaMA erasure + AnyText2 style-consistent backfill
+        #   (image generation consistency; paper's custom diffusion model
+        #    is not open-sourced, so AnyText2 serves as the backend)
         cfg.render_model = "anytext2"
         cfg.erasure_model = "lama"
         cfg.translation_use_vlm = True
         cfg.translation_use_cot = True
+        # If VLM_MODEL is set, enables paper-faithful MMLLM mode;
+        # otherwise falls back to OCR + text-LLM with image-context injection
+        import os as _os
+        if _os.environ.get("VLM_MODEL"):
+            cfg.vlm_model = _os.environ["VLM_MODEL"]
+        if _os.environ.get("VLM_API_BASE"):
+            cfg.vlm_api_base = _os.environ["VLM_API_BASE"]
+        if _os.environ.get("VLM_API_KEY"):
+            cfg.vlm_api_key = _os.environ["VLM_API_KEY"]
     elif solution_name == "solution_c":
         cfg.render_model = "pil"
         cfg.erasure_model = "opencv"
