@@ -16,7 +16,7 @@ ccl2026-dimt/
       renderer.py         # Text erasure + rendering (LaMA/AnyText2/PIL)
       submission.py       # Submission packaging
     solution_a/           # Solution A: AnyTrans pipeline
-    solution_b/           # Solution B: HCIIT two-stage pipeline
+    solution_b/           # Solution B: AnyText2 high-quality rendering
     solution_c/           # Solution C: E-commerce optimized batch processing
     run_all_solutions.py  # Run all solutions
   docs/                   # Analysis documents
@@ -28,13 +28,12 @@ ccl2026-dimt/
 
 ## Three Solutions
 
-| Feature | Solution A (AnyTrans) | Solution B (HCIIT) | Solution C (E-commerce) |
-|---------|----------------------|---------------------|------------------------|
+| Feature | Solution A (AnyTrans) | Solution B (AnyText2) | Solution C (E-commerce) |
+|---------|----------------------|----------------------|------------------------|
 | Erasure | PERT (stroke-level) | LaMA | OpenCV |
-| Rendering | AnyText2 | AnyText2 (style-conditioned) | PIL |
-| Translation | Qwen2.5 + <boxidx> tags | MMLLM + 4-step CoT | Batch API |
-| Consistency | - | Translation + Image Gen | - |
-| Classification | Basic selective | +Style latent extraction | +E-commerce rules |
+| Rendering | AnyText2 | AnyText2 | PIL |
+| Translation | Qwen2.5 + <boxidx> tags | Qwen-VL + CoT | Batch API |
+| Classification | Basic selective | +Style extraction | +E-commerce rules |
 | Speed | Medium | Slow | Fast |
 | Quality | High | Highest | Medium |
 
@@ -44,7 +43,22 @@ ccl2026-dimt/
 cd src
 python run_all_solutions.py --solution all
 python run_all_solutions.py --solution solution_a --max_images 5
+python run_all_solutions.py --solution solution_c --input_dir /path/to/image.jpg --output_dir /path/to/output --target_langs en ja
+python run_all_solutions.py --solution all --input_dir /path/to/images --output_dir /path/to/output --target_langs en es pt
 `
+
+### CLI Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--solution` | `all` | Which solution to run: `solution_a`, `solution_b`, `solution_c`, or `all` |
+| `--input_dir` | `<project>/dataset/source_images` | Source image path: a single image file or a directory of images |
+| `--output_dir` | `<project>/outputs/results_<solution>` | Directory for translated output images |
+| `--target_langs` | `en es pt ja fr` | Target language codes (space-separated) |
+| `--max_images` | `0` (all) | Maximum number of images to process |
+| `--skip_existing` | off | Skip images that already have all language outputs |
+
+Target languages can also be set via the `TARGET_LANGS` environment variable (e.g. `TARGET_LANGS=en,ja`).
 
 ## Debug Intermediate Files
 

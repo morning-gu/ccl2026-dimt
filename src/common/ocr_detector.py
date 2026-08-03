@@ -25,6 +25,9 @@ class OCRDetector:
         self.config = config
         self._ocr = None
         self._backend = "rapidocr"
+        # Single-char detections that are almost always graphical symbols
+        # (crosses, plus signs, daggers) rather than real text in product images.
+        self._symbol_chars = {"十", "✚", "✛", "✜", "✝", "†", "‡", "+", "＋", "✠", "✡"}
 
     def _init_rapidocr(self):
         """Initialize RapidOCR. Raises if the package is not installed."""
@@ -72,5 +75,18 @@ class OCRDetector:
                     bbox=bbox,
                     confidence=float(conf),
                 ))
+        # Filter single-char graphical symbols (cross/十字架 etc.)
+        # OCR often misidentifies cross shapes as the character "十".
+        regions = [r for r in regions if not self._is_likely_symbol(r)]
         logger.debug("RapidOCR detected %d regions", len(regions))
         return regions
+
+    def _is_likely_symbol(self, region: TextRegion) -> bool:
+        """Return True if the region is a single-char graphical symbol, not text."""
+        text = region.text.strip()
+        if len(text) != 1:
+            return False
+        if text in self._symbol_chars:
+            logger.debug("Filtering symbol region: %r (conf=%.3f)", text, region.confidence)
+            return True
+        return False

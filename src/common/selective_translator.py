@@ -108,12 +108,19 @@ class SelectiveTranslator:
 
         # 4. Technical specifications
         if self._spec_pattern.search(text):
-            # Specs may contain translatable parts, but the unit portion stays
-            # For competition, we preserve specs as-is to avoid errors
-            region.is_translatable = False
-            region.preserve_reason = "specification"
-            region.region_type = "spec"
-            return region
+            # Only preserve as spec when the text is essentially just numbers + units.
+            # If translatable words remain after removing spec matches (e.g. "周长"
+            # in "周长50cm"), let the translator handle it — it can preserve units
+            # while translating the surrounding text.
+            stripped = self._spec_pattern.sub("", text)
+            stripped = re.sub(r'[\d\s,./\-:%~≈至到\[\]（）()]+', '', stripped)
+            if not stripped:
+                region.is_translatable = False
+                region.preserve_reason = "specification"
+                region.region_type = "spec"
+                return region
+            # Mixed spec + translatable text → fall through to normal translation
+            # (e.g. "周长50cm", "重量2kg", "长35cm宽20cm")
 
         # 5. Trademark symbols
         if self._trademark_pattern.search(text):
@@ -126,7 +133,7 @@ class SelectiveTranslator:
         if self.preserve_brand:
             text_lower = text.lower()
             for kw in self.brand_keywords:
-                if kw in text_lower:
+                if self._brand_keyword_match(kw, text_lower):
                     region.is_translatable = False
                     region.preserve_reason = f"brand:{kw}"
                     region.region_type = "brand"
@@ -160,6 +167,19 @@ class SelectiveTranslator:
         region.is_translatable = True
         region.region_type = "text"
         return region
+
+    def _brand_keyword_match(self, keyword: str, text_lower: str) -> bool:
+        """Match brand keyword with word-boundary awareness.
+
+        Short keywords (<=2 chars) require a word boundary so that single
+        letters like 'C' or 'R' don't match substrings of arbitrary text
+        (e.g. 'c' in 'cm', 'r' in 'artwork').
+        """
+        if len(keyword) <= 2:
+            # Require a non-alphanumeric boundary on both sides
+            pattern = r'(?<![a-z0-9])' + re.escape(keyword) + r'(?![a-z0-9])'
+            return re.search(pattern, text_lower) is not None
+        return keyword in text_lower
 
     def classify_regions(self, regions: List[TextRegion]) -> List[TextRegion]:
         """Classify all regions."""

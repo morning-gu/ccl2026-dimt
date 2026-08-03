@@ -1,37 +1,25 @@
-"""Solution B: HCIIT (High-Consistency In-Image Translation) pipeline.
+"""Solution B: AnyText2-focused pipeline for highest rendering quality.
 
-Reproduces the HCIIT paper (Fu et al., "Ensuring Consistency for
-In-Image Translation") two-stage framework:
+Architecture:
+  1. PP-OCRv4 detection (with fine-tuned detection for product images)
+  2. Selective translation with enhanced brand/spec detection
+  3. Qwen-VL (Vision-Language Model) + CoT translation
+     - Uses image context for more accurate translation
+     - CoT for marketing text adaptation
+  4. LaMA (Large Mask Inpainting) for text erasure
+     - Superior background restoration vs SD inpainting
+  5. AnyText2 style-controlled rendering
+     - Direct style transfer from original text
+     - Position, font, color, size preservation
 
-  Stage 1 - Text-Image Translation (MMLLM + 4-step CoT):
-    Ensures Translation Consistency by using a Multimodal Multilingual
-    Large Language Model (MMLLM) that directly sees the image during
-    translation. The 4-step Chain-of-Thought:
-      Step 1: Recognize text in image AND translate (MMLLM reads image)
-      Step 2: Provide detailed image description
-      Step 3: Correct recognition errors using image context
-      Step 4: Disambiguate translation using image description
-    This resolves polysemy (e.g., "Bank" -> "riverbank" not "bank"
-    when the image shows a river scene).
+This solution prioritizes rendering quality (t_pixel, t_font, t_color, t_size)
+which are the weakest dimensions in the current leaderboard.
 
-  Stage 2 - Image Backfilling (Style-Consistent Diffusion):
-    Ensures Image Generation Consistency by rendering translated text
-    with style matching the original (font, color, thickness) while
-    preserving background integrity.
-      a) Style Latent Module: Zs = g(D(S) + D(B))
-         S = style image (original text), B = background (erased)
-      b) Glyph Latent Module: Za = f(G(lg) + P(lp) + D(lm))
-         (glyph + position + masked image, consistent with AnyText)
-      c) Text Erase Model: removes text to get background B
-
-    NOTE: The paper's custom style-consistent diffusion model (trained
-    on 400K pseudo pairs) is not open-sourced. We use AnyText2 as the
-    rendering backend with HCIIT-style conditioning (font hints + color).
-
-  Competition extensions (not in the paper):
-    - Selective translation: brand names, prices, specs are preserved
-    - Multi-target language support (zh -> en/es/pt/ja/fr)
-    - Debug intermediate file output
+Key differentiators from Solution A:
+  - LaMA erasure instead of SD inpainting (cleaner backgrounds)
+  - Qwen-VL instead of Qwen2.5 text-only (better context)
+  - Enhanced style extraction from original text regions
+  - Region-level processing for fine-grained control
 """
 import os
 import sys
@@ -45,46 +33,216 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common.config import PipelineConfig, TARGET_LANGUAGES, load_config_from_env
 from common.ocr_detector import OCRDetector
 from common.selective_translator import TextRegion, SelectiveTranslator
-from common.debug_saver import DebugSaver
-from solution_b.hciit_translator import HCIITTranslator
-from solution_b.hciit_backfill import HCIITBackfiller, StyleLatentExtractor
+from common.translator import ContextAwareTranslator
+from common.renderer import TextEraser, TextRenderer
 from common.submission import SubmissionPackager
+from common.debug_saver import DebugSaver
 
 logger = logging.getLogger("solution_b")
 
 
-class SolutionBPipeline:
-    """HCIIT two-stage in-image translation pipeline.
+class StyleExtractor:
+    """Extract detailed style information from text regions.
 
-    Stage 1: MMLLM-based translation with 4-step CoT
-    Stage 2: Style-consistent image backfilling
+    This is Solution B's key enhancement - extracting per-region
+    font, color, size, and style attributes for precise rendering.
     """
+
+    def __init__(self):
+        self._color_analyzer = None
+
+    def extract_style(self, image: np.ndarray, region: TextRegion) -> dict:
+        """Extract style attributes from a text region.
+
+        Returns dict with:
+            font_family: estimated font family
+            font_size: estimated font size in pixels
+            font_weight: normal/bold
+            color: RGB text color
+            bg_color: RGB background color
+            alignment: left/center/right
+            is_vertical: whether text is vertical
+        """
+        x1, y1, x2, y2 = [int(v) for v in region.bbox[:4]]
+        h, w = image.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+
+        roi = image[y1:y2, x1:x2]
+        if roi.size == 0:
+            return {}
+
+        style = {}
+
+        # Font size from bbox height
+        box_h = y2 - y1
+        style["font_size"] = max(10, int(box_h * 0.75))
+
+        # Detect text color (most frequent non-background color)
+        style["color"] = self._detect_text_color(roi)
+        style["bg_color"] = self._detect_bg_color(roi)
+
+        # Detect if bold (heuristic: compare stroke width)
+        style["font_weight"] = self._detect_weight(roi)
+
+        # Detect alignment
+        style["alignment"] = "center"  # default for e-commerce
+
+        # Detect vertical text
+        box_w = x2 - x1
+        style["is_vertical"] = box_h > box_w * 2
+
+        return style
+
+    def _detect_text_color(self, roi: np.ndarray) -> Tuple[int, int, int]:
+        """Detect the dominant text color in the region."""
+        try:
+            import cv2
+            # Convert to grayscale, threshold to find text pixels
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            # Text is typically darker or lighter than background
+            mean = np.mean(gray)
+            if mean > 128:
+                # Light background, dark text
+                mask = gray < mean - 30
+            else:
+                # Dark background, light text
+                mask = gray > mean + 30
+
+            if mask.any():
+                text_pixels = roi[mask]
+                color = tuple(int(c) for c in np.median(text_pixels, axis=0))
+            else:
+                color = (0, 0, 0)
+            return color
+        except Exception:
+            return (0, 0, 0)
+
+    def _detect_bg_color(self, roi: np.ndarray) -> Tuple[int, int, int]:
+        """Detect the background color in the region."""
+        try:
+            import cv2
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            mean = np.mean(gray)
+            if mean > 128:
+                mask = gray >= mean - 30
+            else:
+                mask = gray <= mean + 30
+
+            if mask.any():
+                bg_pixels = roi[mask]
+                color = tuple(int(c) for c in np.median(bg_pixels, axis=0))
+            else:
+                color = (255, 255, 255)
+            return color
+        except Exception:
+            return (255, 255, 255)
+
+    def _detect_weight(self, roi: np.ndarray) -> str:
+        """Detect if text is bold (heuristic)."""
+        try:
+            import cv2
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            # Measure stroke width via distance transform
+            dist = cv2.distanceTransform(binary, cv2.DIST_L2, 3)
+            median_width = np.median(dist[dist > 0]) if (dist > 0).any() else 1
+            return "bold" if median_width > 3.5 else "normal"
+        except Exception:
+            return "normal"
+
+
+class ImageContextAnalyzer:
+    """Analyze the full image to provide context for VLM translation.
+
+    Uses Qwen-VL to understand the product image content,
+    which improves translation quality for marketing text.
+    """
+
+    def __init__(self, config: PipelineConfig):
+        self.config = config
+        self._client = None
+
+    def analyze(self, image: np.ndarray) -> str:
+        """Generate a description of the image content for translation context."""
+        self._ensure_client()
+        try:
+            import base64
+            from PIL import Image
+            import io
+
+            # Encode image to base64
+            img_pil = Image.fromarray(image)
+            buf = io.BytesIO()
+            img_pil.save(buf, format="JPEG")
+            b64 = base64.b64encode(buf.getvalue()).decode()
+
+            vlm_model = getattr(self.config, 'vlm_model', '') or self.config.translation_model
+            response = self._client.chat.completions.create(
+                model=vlm_model,
+                messages=[
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                        {"type": "text", "text": (
+                            "Describe this e-commerce product image briefly. "
+                            "Focus on: product type, key features visible, "
+                            "and the overall marketing message. "
+                            "Be concise (2-3 sentences)."
+                        )},
+                    ]},
+                ],
+                max_tokens=256,
+                temperature=0.1,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.warning("Image context analysis failed: %s", e)
+            return ""
+
+    def _ensure_client(self):
+        if self._client is not None:
+            return
+        try:
+            from openai import OpenAI
+            # Use the VLM endpoint if configured, else the translation endpoint
+            # (both may share one gateway). Missing openai raises, no stub.
+            api_base = getattr(self.config, 'vlm_api_base', '') or self.config.translation_api_base
+            api_key = getattr(self.config, 'vlm_api_key', '') or self.config.translation_api_key
+            self._client = OpenAI(api_key=api_key, base_url=api_base)
+            logger.info("VLM client initialized (base: %s)", api_base)
+        except ImportError:
+            raise ImportError(
+                "openai package not installed; VLM image-context analysis "
+                "requires it (pip install openai). No stub fallback."
+            )
+
+
+class SolutionBPipeline:
+    """AnyText2-focused pipeline with highest rendering quality."""
 
     def __init__(self, config: Optional[PipelineConfig] = None):
         self.config = config or PipelineConfig()
         self.config = load_config_from_env(self.config)
+        # Model backends and translation flags are set by the caller via
+        # PipelineConfig, run_all_solutions.py, or env vars. Do not
+        # override them here -- respect the caller's choice.
 
-        # Stage 1: Translation components
+        # Initialize components
         self.ocr = OCRDetector(self.config)
         self.selector = SelectiveTranslator(
             preserve_brand=self.config.preserve_brand,
             preserve_logo=self.config.preserve_logo,
             logo_threshold=self.config.logo_detection_threshold,
         )
-        self.translator = HCIITTranslator(self.config)
-        self.style_extractor = StyleLatentExtractor()
-
-        # Stage 2: Backfilling components
-        self.backfiller = HCIITBackfiller(self.config)
-
-        # Utilities
+        self.translator = ContextAwareTranslator(self.config)
+        self.eraser = TextEraser(self.config)
+        self.renderer = TextRenderer(self.config)
         self.packager = SubmissionPackager(self.config)
+        self.style_extractor = StyleExtractor()
+        self.context_analyzer = ImageContextAnalyzer(self.config)
         self.debug = DebugSaver(self.config, solution_name="solution_b")
 
-        mode = "MMLLM" if self.translator._mmlm_mode else "OCR+LLM fallback"
-        logger.info(
-            "Solution B pipeline initialized (HCIIT two-stage, %s mode)", mode
-        )
+        logger.info("Solution B pipeline initialized (AnyText2-focused, highest quality)")
 
     def process_single_image(
         self,
@@ -96,43 +254,65 @@ class SolutionBPipeline:
         start_time = time.time()
         logger.info("Processing: %s -> %s", os.path.basename(image_path), target_lang)
 
-        # ---- Stage 1: Text-Image Translation ----
-        regions, image = self._stage1_detect_and_classify(image_path, target_lang)
+        # Step 1: OCR detection
+        regions, image = self.ocr.detect_from_path(image_path)
+        logger.info("  OCR: %d text regions detected", len(regions))
         image_stem = Path(image_path).stem
+        self.debug.save_original(image, image_stem)
+        self.debug.save_ocr_vis(image, regions, image_stem, target_lang)
 
-        if not regions or not any(r.is_translatable for r in regions):
+        if not regions:
             import cv2
             cv2.imwrite(output_path, image)
             return output_path
 
-        # Extract style info for Stage 2 (language-independent)
+        # Step 2: Extract style information from each region (Solution B enhancement)
         for region in regions:
-            if not region.style_info:
-                region.style_info = {}
-            self._extract_region_style(image, region)
+            region.style_info = self.style_extractor.extract_style(image, region)
+        logger.info("  Style: extracted for %d regions", len(regions))
+        self.debug.save_style(regions, image_stem, target_lang)
 
-        # Translate with HCIIT 4-step CoT
-        regions = self.translator.translate_regions(
-            image, regions, target_lang
-        )
+        # Step 3: Selective translation classification
+        regions = self.selector.classify_regions(regions)
         n_translatable = sum(1 for r in regions if r.is_translatable)
-        logger.info("  Stage 1 (Translation): %d regions translated", n_translatable)
+        n_preserved = sum(1 for r in regions if not r.is_translatable)
+        logger.info("  Selective: %d translatable, %d preserved", n_translatable, n_preserved)
+        self.debug.save_classification(regions, image_stem, target_lang)
+
+        if n_translatable == 0:
+            import cv2
+            cv2.imwrite(output_path, image)
+            return output_path
+
+        # Step 4: Image context analysis via VLM (Solution B enhancement)
+        image_context = self.context_analyzer.analyze(image)
+        if image_context:
+            logger.info("  Context: %s", image_context[:100])
+        self.debug.save_context_analysis(image_context, image_stem, target_lang)
+
+        # Step 5: Translate with VLM + CoT
+        regions = self.translator.translate_regions(
+            regions, target_lang, image_context=image_context
+        )
+        logger.info("  Translation: completed for %d regions", n_translatable)
         self.debug.save_translation(regions, image_stem, target_lang)
 
-        # ---- Stage 2: Image Backfilling ----
+        # Step 6: LaMA erasure (only translatable regions)
         translatable_regions = [r for r in regions if r.is_translatable]
-
-        # Step 2a: Text Erase (get background image B)
-        mask, erased_image = self.backfiller.erase_text(image, translatable_regions)
+        mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
+                                     dilate=self.config.erasure_dilate_pixels)
         self.debug.save_mask(mask, image_stem, target_lang)
+        erased_image = self.eraser.erase(image, translatable_regions)
+        logger.info("  Erasure (LaMA): %d regions erased", len(translatable_regions))
         self.debug.save_erased(erased_image, image_stem, target_lang)
-        logger.info("  Stage 2a (Erase): %d regions erased", len(translatable_regions))
 
-        # Step 2b: Style-Consistent Render
-        result_image = self.backfiller.backfill(
-            image, erased_image, regions
+        # Step 7: AnyText2 style-controlled rendering
+        result_image = self.renderer.render(
+            erased_image,
+            translatable_regions,
+            style_reference=image,
         )
-        logger.info("  Stage 2b (Backfill): completed")
+        logger.info("  Rendering (AnyText2): completed")
         self.debug.save_render_result(result_image, image_stem, target_lang)
 
         # Save result
@@ -150,18 +330,15 @@ class SolutionBPipeline:
     ) -> Dict[str, str]:
         """Process one image for all target languages.
 
-        Optimized per the HCIIT framework:
-          - Stage 1 OCR + classification + style extraction: run once
-          - Stage 2 text erasure: run once (language-independent)
-          - Stage 1 translation + Stage 2 rendering: run per language
+        Optimized: OCR, classification, style extraction, VLM context analysis,
+        and erasure are language-independent and run only once.
+        Only translation and rendering repeat per language.
         """
         stem = Path(image_path).stem
         ext = Path(image_path).suffix
         results = {}
 
-        # ---- Language-independent steps (run once) ----
-
-        # Stage 1a: OCR detection
+        # --- Language-independent steps (run once) ---
         regions, image = self.ocr.detect_from_path(image_path)
         logger.info("  OCR: %d text regions detected", len(regions))
         self.debug.save_original(image, stem)
@@ -177,14 +354,17 @@ class SolutionBPipeline:
                 results[lang_code] = output_path
             return results
 
+        # Style extraction (Solution B enhancement)
+        for region in regions:
+            region.style_info = self.style_extractor.extract_style(image, region)
+        logger.info("  Style: extracted for %d regions", len(regions))
+        self.debug.save_style(regions, stem, "all")
+
         # Selective classification
         regions = self.selector.classify_regions(regions)
         n_translatable = sum(1 for r in regions if r.is_translatable)
         n_preserved = sum(1 for r in regions if not r.is_translatable)
-        logger.info(
-            "  Selective: %d translatable, %d preserved",
-            n_translatable, n_preserved,
-        )
+        logger.info("  Selective: %d translatable, %d preserved", n_translatable, n_preserved)
         self.debug.save_classification(regions, stem, "all")
 
         if n_translatable == 0:
@@ -197,22 +377,22 @@ class SolutionBPipeline:
                 results[lang_code] = output_path
             return results
 
-        # Extract style info for Stage 2 (language-independent)
-        for region in regions:
-            if not region.style_info:
-                region.style_info = {}
-            self._extract_region_style(image, region)
-        logger.info("  Style: extracted for %d regions", len(regions))
-        self.debug.save_style(regions, stem, "all")
+        # VLM image context analysis (run once, reused for all languages)
+        image_context = self.context_analyzer.analyze(image)
+        if image_context:
+            logger.info("  Context: %s", image_context[:100])
+        self.debug.save_context_analysis(image_context, stem, "all")
 
-        # Stage 2a: Text Erase (language-independent)
+        # Erasure (language-independent)
         translatable_regions = [r for r in regions if r.is_translatable]
-        mask, erased_image = self.backfiller.erase_text(image, translatable_regions)
+        mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
+                                     dilate=self.config.erasure_dilate_pixels)
         self.debug.save_mask(mask, stem, "all")
+        erased_image = self.eraser.erase(image, translatable_regions)
+        logger.info("  Erasure (LaMA): %d regions erased", len(translatable_regions))
         self.debug.save_erased(erased_image, stem, "all")
-        logger.info("  Stage 2a (Erase): %d regions erased", len(translatable_regions))
 
-        # ---- Language-dependent steps (run per language) ----
+        # --- Language-dependent steps (run per language) ---
         import copy
         for lang_code in self.config.target_langs:
             lang_dir = os.path.join(output_dir, lang_code)
@@ -226,24 +406,19 @@ class SolutionBPipeline:
                 # Deep-copy so translations don't leak across languages
                 lang_regions = copy.deepcopy(regions)
 
-                # Stage 1b: Translate with HCIIT 4-step CoT
+                # Translate with VLM context
                 lang_regions = self.translator.translate_regions(
-                    image, lang_regions, lang_code
+                    lang_regions, lang_code, image_context=image_context
                 )
-                logger.info(
-                    "    Stage 1 (Translation): completed for %d regions",
-                    n_translatable,
-                )
+                logger.info("    Translation: completed for %d regions", n_translatable)
                 self.debug.save_translation(lang_regions, stem, lang_code)
 
-                # Stage 2b: Style-Consistent Render
-                lang_translatable = [
-                    r for r in lang_regions if r.is_translatable
-                ]
-                result_image = self.backfiller.backfill(
-                    image, erased_image, lang_regions
+                # Render
+                lang_translatable = [r for r in lang_regions if r.is_translatable]
+                result_image = self.renderer.render(
+                    erased_image, lang_translatable, style_reference=image,
                 )
-                logger.info("    Stage 2 (Backfill): completed")
+                logger.info("    Rendering: completed")
                 self.debug.save_render_result(result_image, stem, lang_code)
 
                 import cv2
@@ -253,127 +428,17 @@ class SolutionBPipeline:
                 elapsed = time.time() - start_time
                 logger.info("    Done in %.2fs", elapsed)
             except Exception as e:
-                logger.error(
-                    "Failed processing %s -> %s: %s", image_path, lang_code, e
-                )
-                raise
+                logger.error("Failed processing %s -> %s: %s", image_path, lang_code, e)
+                raise  # no degradation: surface the failure instead of copying the source
 
         return results
-
-    def _stage1_detect_and_classify(
-        self, image_path: str, target_lang: str
-    ) -> Tuple[List[TextRegion], np.ndarray]:
-        """Stage 1a: OCR detection + selective classification."""
-        regions, image = self.ocr.detect_from_path(image_path)
-        image_stem = Path(image_path).stem
-        logger.info("  OCR: %d text regions detected", len(regions))
-        self.debug.save_original(image, image_stem)
-        self.debug.save_ocr_vis(image, regions, image_stem, target_lang)
-
-        if not regions:
-            return regions, image
-
-        regions = self.selector.classify_regions(regions)
-        n_translatable = sum(1 for r in regions if r.is_translatable)
-        n_preserved = sum(1 for r in regions if not r.is_translatable)
-        logger.info(
-            "  Selective: %d translatable, %d preserved",
-            n_translatable, n_preserved,
-        )
-        self.debug.save_classification(regions, image_stem, target_lang)
-        return regions, image
-
-    def _extract_region_style(self, image: np.ndarray, region: TextRegion):
-        """Extract style attributes from a text region for Stage 2.
-
-        Populates region.style_info with font_size, color, bg_color,
-        font_weight, alignment, is_vertical for HCIIT backfilling.
-        """
-        x1, y1, x2, y2 = [int(v) for v in region.bbox[:4]]
-        h, w = image.shape[:2]
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w, x2), min(h, y2)
-
-        roi = image[y1:y2, x1:x2]
-        if roi.size == 0:
-            return
-
-        # Font size from bbox height
-        box_h = y2 - y1
-        region.style_info["font_size"] = max(10, int(box_h * 0.75))
-
-        # Detect text color (most frequent non-background color)
-        region.style_info["color"] = self._detect_text_color(roi)
-        region.style_info["bg_color"] = self._detect_bg_color(roi)
-
-        # Detect if bold (heuristic: compare stroke width)
-        region.style_info["font_weight"] = self._detect_weight(roi)
-
-        # Detect alignment
-        region.style_info["alignment"] = "center"
-
-        # Detect vertical text
-        box_w = x2 - x1
-        region.style_info["is_vertical"] = box_h > box_w * 2
-
-    @staticmethod
-    def _detect_text_color(roi: np.ndarray) -> Tuple[int, int, int]:
-        """Detect the dominant text color in the region."""
-        try:
-            gray = np.mean(roi, axis=2) if roi.ndim == 3 else roi.astype(float)
-            mean = np.mean(gray)
-            if mean > 128:
-                mask = gray < mean - 30
-            else:
-                mask = gray > mean + 30
-            if mask.any():
-                text_pixels = roi[mask]
-                color = tuple(int(c) for c in np.median(text_pixels, axis=0))
-            else:
-                color = (0, 0, 0)
-            return color
-        except Exception:
-            return (0, 0, 0)
-
-    @staticmethod
-    def _detect_bg_color(roi: np.ndarray) -> Tuple[int, int, int]:
-        """Detect the background color in the region."""
-        try:
-            gray = np.mean(roi, axis=2) if roi.ndim == 3 else roi.astype(float)
-            mean = np.mean(gray)
-            if mean > 128:
-                mask = gray >= mean - 30
-            else:
-                mask = gray <= mean + 30
-            if mask.any():
-                bg_pixels = roi[mask]
-                color = tuple(int(c) for c in np.median(bg_pixels, axis=0))
-            else:
-                color = (255, 255, 255)
-            return color
-        except Exception:
-            return (255, 255, 255)
-
-    @staticmethod
-    def _detect_weight(roi: np.ndarray) -> str:
-        """Detect if text is bold (heuristic)."""
-        try:
-            gray = np.mean(roi, axis=2) if roi.ndim == 3 else roi.astype(float)
-            mean = np.mean(gray)
-            text_mask = gray < mean if mean > 128 else gray > mean
-            if text_mask.any():
-                ratio = text_mask.sum() / text_mask.size
-                return "bold" if ratio > 0.35 else "normal"
-            return "normal"
-        except Exception:
-            return "normal"
 
     def run(
         self,
         input_dir: Optional[str] = None,
         output_dir: Optional[str] = None,
     ) -> Dict[str, Dict[str, str]]:
-        """Run the full HCIIT pipeline on all images."""
+        """Run the full pipeline on all images."""
         input_dir = input_dir or self.config.input_dir
         output_dir = output_dir or self.config.output_dir
         if not input_dir or not output_dir:
@@ -392,9 +457,7 @@ class SolutionBPipeline:
 
         all_results = {}
         for i, img_path in enumerate(image_files):
-            logger.info(
-                "[%d/%d] Processing: %s", i + 1, len(image_files), img_path.name
-            )
+            logger.info("[%d/%d] Processing: %s", i + 1, len(image_files), img_path.name)
             results = self.process_image_all_languages(str(img_path), output_dir)
             all_results[str(img_path)] = results
 

@@ -156,8 +156,9 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
         "DEBUG_DIR": "debug_dir",
         "DEBUG_OCR": "debug_ocr",
         "DEBUG_MASK": "debug_mask",
-        "DEBUG_ERASED": "debug_erased",
-        "DEBUG_TRANSLATION": "debug_translation",
+       "DEBUG_ERASED": "debug_erased",
+       "DEBUG_TRANSLATION": "debug_translation",
+        "TARGET_LANGS": "target_langs",
     }
 
     bool_fields = {
@@ -193,9 +194,14 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
         "LOGO_DETECTION_THRESHOLD": "logo_detection_threshold",
     }
 
+    list_fields = {
+        "TARGET_LANGS": "target_langs",
+    }
+
     env_map.update(bool_fields)
     env_map.update(int_fields)
     env_map.update(float_fields)
+    env_map.update(list_fields)
 
     for env_key, field_name in env_map.items():
         val = os.environ.get(env_key)
@@ -206,5 +212,8 @@ def load_config_from_env(cfg: PipelineConfig) -> PipelineConfig:
                 val = float(val)
             elif field_name in bool_fields.values():
                 val = val.lower() in ("1", "true", "yes")
+            elif field_name in list_fields.values():
+                # Comma- or space-separated list, e.g. "en,es,pt" or "en es pt"
+                val = [x.strip() for x in val.replace(",", " ").split() if x.strip()]
             setattr(cfg, field_name, val)
     return cfg

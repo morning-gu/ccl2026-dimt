@@ -28,7 +28,9 @@ logger = logging.getLogger("run_all")
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 INPUT_DIR = str(_PROJECT_ROOT / "dataset" / "source_images")
 OUTPUT_BASE = str(_PROJECT_ROOT / "outputs")
-def get_config(solution_name):
+
+
+def get_config(solution_name, input_dir=None, output_dir=None, target_langs=None):
     cfg = PipelineConfig(
         input_dir=INPUT_DIR,
         output_dir=os.path.join(OUTPUT_BASE, f"results_{solution_name}"),
@@ -37,11 +39,18 @@ def get_config(solution_name):
     )
     # Override from .env / environment variables
     cfg = load_config_from_env(cfg)
+    # CLI args take priority over env vars
+    if input_dir:
+        cfg.input_dir = input_dir
+    if output_dir:
+        cfg.output_dir = output_dir
+    if target_langs:
+        cfg.target_langs = target_langs
     # Solution-specific backends (NOT configurable via env vars).
     #
     # Design intent (see README):
     #   A: PERT stroke-level erasure + AnyText2 rendering (AnyTrans-faithful)
-    #   B: HCIIT two-stage: MMLLM 4-step CoT + LaMA erasure + AnyText2 backfill
+    #   B: LaMA erasure + AnyText2 rendering + VLM context (highest quality)
     #   C: OpenCV erasure + PIL rendering (fast, no GPU)
     #
     # Heavy backends (anytext2/lama/pert) raise if deps are missing;
@@ -61,33 +70,21 @@ def get_config(solution_name):
                 "https://github.com/wangyuxin87/PERT and set PERT_REPO/PERT_CKPT."
             )
     elif solution_name == "solution_b":
-        # HCIIT two-stage framework (Fu et al.)
-        # Stage 1: MMLLM 4-step CoT translation (translation consistency)
-        # Stage 2: LaMA erasure + AnyText2 style-consistent backfill
-        #   (image generation consistency; paper's custom diffusion model
-        #    is not open-sourced, so AnyText2 serves as the backend)
         cfg.render_model = "anytext2"
         cfg.erasure_model = "lama"
         cfg.translation_use_vlm = True
         cfg.translation_use_cot = True
-        # If VLM_MODEL is set, enables paper-faithful MMLLM mode;
-        # otherwise falls back to OCR + text-LLM with image-context injection
-        import os as _os
-        if _os.environ.get("VLM_MODEL"):
-            cfg.vlm_model = _os.environ["VLM_MODEL"]
-        if _os.environ.get("VLM_API_BASE"):
-            cfg.vlm_api_base = _os.environ["VLM_API_BASE"]
-        if _os.environ.get("VLM_API_KEY"):
-            cfg.vlm_api_key = _os.environ["VLM_API_KEY"]
     elif solution_name == "solution_c":
         cfg.render_model = "pil"
         cfg.erasure_model = "opencv"
     return cfg
-def run_solution(solution_name, max_images=0, skip_existing=False):
+def run_solution(solution_name, max_images=0, skip_existing=False,
+                 input_dir=None, output_dir=None, target_langs=None):
     logger.info("=" * 60)
     logger.info("Running %s", solution_name.upper())
     logger.info("=" * 60)
-    cfg = get_config(solution_name)
+    cfg = get_config(solution_name, input_dir=input_dir,
+                    output_dir=output_dir, target_langs=target_langs)
     os.makedirs(cfg.output_dir, exist_ok=True)
     if solution_name == "solution_a":
         from solution_a.pipeline import SolutionAPipeline
@@ -98,8 +95,19 @@ def run_solution(solution_name, max_images=0, skip_existing=False):
     elif solution_name == "solution_c":
         from solution_c.pipeline import SolutionCPipeline
         pipeline = SolutionCPipeline(cfg)
-    input_path = Path(INPUT_DIR)
-    image_files = sorted(input_path.glob("*.jpg"))
+    input_path = Path(cfg.input_dir)
+    if input_path.is_file():
+        # Single image file specified directly
+        image_files = [input_path]
+    elif input_path.is_dir():
+        image_files = []
+        for ext in cfg.supported_image_formats:
+            image_files.extend(input_path.glob(f"*{ext}"))
+            image_files.extend(input_path.glob(f"*{ext.upper()}"))
+        image_files = sorted(set(image_files))
+    else:
+        logger.error("Input path does not exist: %s", input_path)
+        return {}
     if max_images > 0:
         image_files = image_files[:max_images]
     # Skip images that already have all language outputs
@@ -151,11 +159,34 @@ def run_solution(solution_name, max_images=0, skip_existing=False):
     return all_results
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Run DIMT solutions on the competition dataset or custom images."
+    )
     parser.add_argument("--solution", choices=["solution_a", "solution_b", "solution_c", "all"], default="all")
+    parser.add_argument("--input_dir", default=None,
+                        help="Source image path: a single image file or a directory of images. "
+                             "Defaults to <project>/dataset/source_images")
+    parser.add_argument("--output_dir", default=None,
+                        help="Directory for translated output images. "
+                             "Defaults to <project>/outputs/results_<solution>")
+    parser.add_argument("--target_langs", nargs="+", default=None,
+                        help="Target language codes (e.g. en es pt ja fr). "
+                             "Defaults to en es pt ja fr")
     parser.add_argument("--max_images", type=int, default=0)
     parser.add_argument("--skip_existing", action="store_true", help="Skip images that already have output")
     args = parser.parse_args()
     solutions = ["solution_a", "solution_b", "solution_c"] if args.solution == "all" else [args.solution]
     for sol in solutions:
-        run_solution(sol, max_images=args.max_images, skip_existing=args.skip_existing)
+        # When running "all" with a custom output_dir, create per-solution
+        # subdirectories to avoid overwriting each other.
+        sol_output = args.output_dir
+        if args.output_dir and args.solution == "all":
+            sol_output = os.path.join(args.output_dir, f"results_{sol}")
+        run_solution(
+            sol,
+            max_images=args.max_images,
+            skip_existing=args.skip_existing,
+            input_dir=args.input_dir,
+            output_dir=sol_output,
+            target_langs=args.target_langs,
+        )
