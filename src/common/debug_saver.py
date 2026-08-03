@@ -95,8 +95,14 @@ class DebugSaver:
             for i, r in enumerate(regions):
                 x1, y1, x2, y2 = [int(v) for v in r.bbox[:4]]
                 color = (0, 255, 0) if r.is_translatable else (0, 0, 255)
-                cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
-                label = f"{i}: {r.text[:20]}"
+                # Draw polygon when available, else rectangle
+                if getattr(r, "bbox_poly", None) and len(r.bbox_poly) >= 4:
+                    pts = np.array(r.bbox_poly, dtype=np.int32).reshape(-1, 1, 2)
+                    cv2.polylines(vis, [pts], True, color, 2)
+                else:
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+                angle_str = f" a={r.angle:.1f}" if abs(getattr(r, "angle", 0.0)) > 1.0 else ""
+                label = f"{i}: {r.text[:20]}{angle_str}"
                 cv2.putText(vis, label, (x1, y1 - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
             out_dir = self._image_dir(image_stem)
@@ -443,13 +449,22 @@ class DebugSaver:
         regions: List[TextRegion],
         dilate: int = 5,
     ) -> np.ndarray:
-        """Build binary mask from region bboxes."""
+        """Build binary mask from region bboxes (polygon-aware)."""
         h, w = shape
         mask = np.zeros((h, w), dtype=np.uint8)
         for region in regions:
-            x1 = max(0, int(region.bbox[0]) - dilate)
-            y1 = max(0, int(region.bbox[1]) - dilate)
-            x2 = min(w, int(region.bbox[2]) + dilate)
-            y2 = min(h, int(region.bbox[3]) + dilate)
-            mask[y1:y2, x1:x2] = 255
+            if getattr(region, "bbox_poly", None) and len(region.bbox_poly) >= 4:
+                import cv2
+                pts = np.array(region.bbox_poly, dtype=np.int32).reshape(-1, 1, 2)
+                cv2.fillPoly(mask, [pts], 255)
+                if dilate > 0:
+                    d = max(1, dilate // 2)
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * d + 1, 2 * d + 1))
+                    mask = cv2.dilate(mask, kernel, iterations=1)
+            else:
+                x1 = max(0, int(region.bbox[0]) - dilate)
+                y1 = max(0, int(region.bbox[1]) - dilate)
+                x2 = min(w, int(region.bbox[2]) + dilate)
+                y2 = min(h, int(region.bbox[3]) + dilate)
+                mask[y1:y2, x1:x2] = 255
         return mask

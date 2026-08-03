@@ -25,6 +25,11 @@ class TextRegion:
     style_info: dict = field(default_factory=dict)  # font, size, color, etc.
     translated_text: str = ""
     region_type: str = "text"  # text, brand, logo, spec, price, url, code
+    # 4-point polygon from OCR [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] (JSON-friendly).
+    # Preserved so the renderer/eraser can recover rotation; None when unavailable.
+    bbox_poly: Optional[List[List[float]]] = None
+    # Rotation angle in degrees (0 = horizontal, positive = clockwise in image coords).
+    angle: float = 0.0
 
     @property
     def area(self) -> float:

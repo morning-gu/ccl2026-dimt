@@ -139,7 +139,7 @@ class TextEraser:
             self._init_strokenet()
         elif self._backend == "pert" and self._pert_model is None:
             self._init_pert()
-        mask = self._build_mask(image.shape[:2], regions, dilate_pixels or self.config.erasure_dilate_pixels)
+        mask = self._build_mask(image.shape[:2], regions, dilate_pixels or self.config.erasure_dilate_pixels, image=image)
         if self._backend == "lama":
             return self._erase_lama(image, mask)
         if self._backend == "sd_inpaint":
@@ -151,7 +151,7 @@ class TextEraser:
         if self._backend == "pert":
             return self._erase_pert(image, mask)
         raise ValueError(f"Unknown erasure_model: {self._backend!r}")
-    def _build_mask(self, shape, regions, dilate):
+    def _build_mask(self, shape, regions, dilate, image=None):
         h, w = shape
         mask = np.zeros((h, w), dtype=np.uint8)
         for region in regions:
@@ -159,8 +159,79 @@ class TextEraser:
             y1 = max(0, int(region.bbox[1]) - dilate)
             x2 = min(w, int(region.bbox[2]) + dilate)
             y2 = min(h, int(region.bbox[3]) + dilate)
+            if image is not None and (x2 - x1) > 2 and (y2 - y1) > 2:
+                roi = image[y1:y2, x1:x2]
+                text_mask = self._text_pixel_mask(roi, region, x1, y1)
+                if text_mask is not None:
+                    mask[y1:y2, x1:x2] = np.maximum(mask[y1:y2, x1:x2], text_mask)
+                    continue
             mask[y1:y2, x1:x2] = 255
         return mask
+    def _text_pixel_mask(self, roi, region, ox, oy):
+       """Build an erasure mask covering only text strokes, not the full bbox.
+
+       Uses Otsu thresholding within the OCR polygon (when available) to
+       separate text from background, then filters out thin connected
+       components (e.g. measurement lines) by fill-ratio.  Falls back to
+       border-based thresholding when no polygon is present.
+       """
+       try:
+           import cv2
+           rh, rw = roi.shape[:2]
+           if rh < 5 or rw < 5:
+               return None
+           gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+           poly = getattr(region, "bbox_poly", None)
+
+           if poly and len(poly) >= 4:
+               # -- Polygon-aware path: Otsu within polygon --
+               pts = np.array([[(int(p[0]) - ox, int(p[1]) - oy) for p in poly]], dtype=np.int32)
+               pmask = np.zeros((rh, rw), dtype=np.uint8)
+               cv2.fillPoly(pmask, pts, 255)
+               _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+               # Determine which binary class is text by comparing with the
+               # background outside the polygon (but inside the bbox).
+               outside = pmask == 0
+               if outside.sum() > 4:
+                   bg_gray = float(np.median(gray[outside]))
+               else:
+                   border = np.concatenate([gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]])
+                   bg_gray = float(np.median(border))
+               dark_sel = (binary == 0) & (pmask > 0)
+               light_sel = (binary == 255) & (pmask > 0)
+               dark_mean = float(gray[dark_sel].mean()) if dark_sel.any() else bg_gray
+               light_mean = float(gray[light_sel].mean()) if light_sel.any() else bg_gray
+               if abs(dark_mean - bg_gray) > abs(light_mean - bg_gray):
+                   tmask = dark_sel.astype(np.uint8) * 255
+               else:
+                   tmask = light_sel.astype(np.uint8) * 255
+           else:
+               # -- Fallback: border-based threshold --
+               border = np.concatenate([gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]])
+               bg = float(np.median(border))
+               diff = np.abs(gray.astype(np.int16) - bg)
+               thresh = max(40, int(np.std(border) * 2))
+               tmask = (diff > thresh).astype(np.uint8) * 255
+
+           # -- Filter thin connected components (remove lines, keep glyphs) --
+           num, labels, stats, _ = cv2.connectedComponentsWithStats(tmask, connectivity=8)
+           filtered = np.zeros_like(tmask)
+           for i in range(1, num):
+               area = stats[i, cv2.CC_STAT_AREA]
+               bw = stats[i, cv2.CC_STAT_WIDTH]
+               bh = stats[i, cv2.CC_STAT_HEIGHT]
+               fill_ratio = area / max(1, bw * bh)
+               if area < 10 or fill_ratio < 0.1:
+                   continue
+               filtered[labels == i] = 255
+           tmask = filtered
+
+           # Dilate to cover anti-aliased text edges.
+           k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+           tmask = cv2.dilate(tmask, k, iterations=2)
+           return tmask
+       except Exception:
+           return None
     def _erase_lama(self, image, mask):
         from PIL import Image
         result = self._lama_model(Image.fromarray(image), Image.fromarray(mask))
@@ -182,8 +253,13 @@ class TextEraser:
             result[keep] = image[keep]
         return result
     def _erase_opencv(self, image, mask):
-        import cv2
-        return cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+       import cv2
+       result = cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+       # Smooth inpainting artifacts on masked pixels only.
+       smoothed = cv2.medianBlur(result, 3)
+       mask_bool = mask > 0
+       result[mask_bool] = smoothed[mask_bool]
+       return result
     def _erase_strokenet(self, image, mask):
         """Erase via the cascaded stroke-level STRNet.
         STRNet.forward(I, Mm) -> (Ms, Ite, Ms_, Ite_). Ite_ (the output of the
@@ -376,6 +452,9 @@ class TextRenderer:
         text = region.translated_text
         if not text or box_w <= 0 or box_h <= 0:
             return
+        # If the OCR polygon indicates significant rotation, render at that angle.
+        if self._draw_rotated(img_pil, region):
+            return
         weight = region.style_info.get("font_weight")
         font_size = int(region.style_info.get("font_size") or max(10, int(box_h * 0.8)))
         font_size = self._fit_font_size(draw, text, font_size, box_w, box_h)
@@ -399,6 +478,64 @@ class TextRenderer:
                 tx = x1 + max(0, (box_w - ln_w) // 2)
             draw.text((tx, ty), ln, font=font, fill=fill_color)
             ty += line_h
+    def _draw_rotated(self, img_pil, region):
+        """Render translated text at the angle of the original OCR polygon.
+
+        Returns True if the rotated path was used, False to fall back to the
+        regular horizontal renderer (no polygon or near-zero angle).
+        """
+        from PIL import Image, ImageDraw
+        poly = getattr(region, "bbox_poly", None)
+        if not poly or len(poly) < 4:
+            return False
+        # Use pre-computed angle from OCR (fallback to 0 if absent).
+        angle_deg = float(getattr(region, "angle", 0.0))
+        if abs(angle_deg) < 5:
+            return False
+        text = region.translated_text
+        if not text:
+            return True
+        import math
+        dx = poly[1][0] - poly[0][0]
+        dy = poly[1][1] - poly[0][1]
+        # Polygon dimensions: top-edge = text width, left-edge = text height.
+        top_len = int(math.hypot(dx, dy))
+        left_len = int(math.hypot(poly[3][0] - poly[0][0], poly[3][1] - poly[0][1]))
+        if top_len <= 0 or left_len <= 0:
+            return False
+        weight = region.style_info.get("font_weight")
+        font_size = int(region.style_info.get("font_size") or max(10, int(left_len * 0.8)))
+        # Render into a transparent canvas, then rotate and paste.
+        pad = max(top_len, left_len)
+        canvas = Image.new("RGBA", (top_len + pad, left_len + pad), (0, 0, 0, 0))
+        cdraw = ImageDraw.Draw(canvas)
+        font_size = self._fit_font_size(cdraw, text, font_size, top_len, left_len)
+        font = self._load_font(font_size, text, weight)
+        fill_color = region.style_info.get("color", (0, 0, 0))
+        if not isinstance(fill_color, (tuple, list)) or len(fill_color) < 3:
+            fill_color = (0, 0, 0)
+        fill_color = tuple(int(c) for c in fill_color[:3])
+        lines = self._wrap_text(text, font, top_len)
+        line_h = cdraw.textbbox((0, 0), "Ag", font=font)[3]
+        total_h = line_h * len(lines)
+        alignment = region.style_info.get("alignment", "center")
+        cw, ch = canvas.size
+        ty = (ch - total_h) // 2
+        for ln in lines:
+            ln_w = cdraw.textbbox((0, 0), ln, font=font)[2]
+            if alignment == "left":
+                tx = (cw - top_len) // 2 + 2
+            elif alignment == "right":
+                tx = (cw - top_len) // 2 + max(0, top_len - ln_w - 2)
+            else:
+                tx = (cw - ln_w) // 2
+            cdraw.text((tx, ty), ln, font=font, fill=fill_color)
+            ty += line_h
+        rotated = canvas.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
+        cx = int((region.bbox[0] + region.bbox[2]) / 2)
+        cy = int((region.bbox[1] + region.bbox[3]) / 2)
+        img_pil.paste(rotated, (cx - rotated.width // 2, cy - rotated.height // 2), rotated)
+        return True
     def _fit_font_size(self, draw, text, size, box_w, box_h):
         size = max(10, size)
         for _ in range(12):
@@ -465,25 +602,47 @@ class _PilStyleHelper:
             if roi.size == 0:
                 return style
             if not style.get("color"):
-                style["color"] = _PilStyleHelper._text_color(roi)
+                poly = getattr(region, "bbox_poly", None)
+                style["color"] = _PilStyleHelper._text_color(roi, poly, x1, y1)
             if not style.get("font_size"):
                 style["font_size"] = max(10, int((y2 - y1) * 0.75))
         except Exception:
             pass
         return style
     @staticmethod
-    def _text_color(roi):
+    def _text_color(roi, polygon=None, ox=0, oy=0):
         try:
-            pixels = roi.reshape(-1, roi.shape[-1] if roi.ndim == 3 else 1).astype(np.int16)
-            if pixels.shape[0] == 0:
+            import cv2
+            if roi.ndim != 3 or roi.shape[0] < 3 or roi.shape[1] < 3:
                 return (0, 0, 0)
-            mean = pixels.mean(axis=0)
-            bright = pixels.mean(axis=1)
-            thresh = mean.mean()
-            dark_mask = bright < thresh
-            dark_mean = pixels[dark_mask].mean(axis=0) if dark_mask.any() else mean
-            light_mean = pixels[~dark_mask].mean(axis=0) if (~dark_mask).any() else dark_mean
-            color = dark_mean if dark_mask.sum() <= (~dark_mask).sum() else light_mean
-            return tuple(int(c) for c in np.clip(color, 0, 255))
+            h, w = roi.shape[:2]
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            # -- Estimate the local background colour --
+            # When the OCR polygon is available, sample the area *outside*
+            # the polygon (but inside the bbox) — this is the text's
+            # immediate background, which may differ from the bbox border
+            # (e.g. a light strip behind text in a dark product image).
+            bg = None
+            if polygon and len(polygon) >= 4:
+                pts = np.array([[(int(p[0]) - ox, int(p[1]) - oy) for p in polygon]], dtype=np.int32)
+                pmask = np.zeros((h, w), dtype=np.uint8)
+                cv2.fillPoly(pmask, pts, 255)
+                outside = pmask == 0
+                if outside.sum() > h * w * 0.1:
+                    bg = np.median(roi[outside].reshape(-1, 3).astype(np.float32), axis=0)
+            if bg is None:
+                border = np.concatenate([roi[0, :, :], roi[-1, :, :], roi[:, 0, :], roi[:, -1, :]]).astype(np.float32)
+                bg = np.median(border, axis=0)
+            # -- Otsu threshold to separate the two dominant colour classes --
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            dark_m = binary == 0
+            light_m = binary == 255
+            dark_mean = roi[dark_m].reshape(-1, 3).mean(axis=0) if dark_m.any() else bg
+            light_mean = roi[light_m].reshape(-1, 3).mean(axis=0) if light_m.any() else bg
+            # Text is the class that contrasts *more* with the local background.
+            dark_contrast = float(np.linalg.norm(dark_mean - bg))
+            light_contrast = float(np.linalg.norm(light_mean - bg))
+            text_color = dark_mean if dark_contrast > light_contrast else light_mean
+            return tuple(int(c) for c in np.clip(text_color, 0, 255))
         except Exception:
             return (0, 0, 0)

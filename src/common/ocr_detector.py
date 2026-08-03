@@ -70,10 +70,17 @@ class OCRDetector:
                 xs = [p[0] for p in bbox_poly]
                 ys = [p[1] for p in bbox_poly]
                 bbox = [min(xs), min(ys), max(xs), max(ys)]
+                # Rotation angle from the top edge (poly[0] -> poly[1]).
+                import math
+                dx = bbox_poly[1][0] - bbox_poly[0][0]
+                dy = bbox_poly[1][1] - bbox_poly[0][1]
+                angle = math.degrees(math.atan2(dy, dx))
                 regions.append(TextRegion(
                     text=text,
                     bbox=bbox,
                     confidence=float(conf),
+                    bbox_poly=[[float(p[0]), float(p[1])] for p in bbox_poly],
+                    angle=angle,
                 ))
         # Filter single-char graphical symbols (cross/十字架 etc.)
         # OCR often misidentifies cross shapes as the character "十".
