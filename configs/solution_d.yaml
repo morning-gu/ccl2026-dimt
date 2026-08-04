@@ -1,5 +1,5 @@
 extends: base.yaml
-solution_name: solution_c
+solution_name: solution_d
 
 plugins:
   ocr: rapidocr
@@ -8,7 +8,7 @@ plugins:
   context_analyzer: noop
   product_classifier: product
   translator: context_aware
-  eraser: opencv
+  eraser: lama
   box_resizer: noop
   renderer: pil
   quality_checker: basic

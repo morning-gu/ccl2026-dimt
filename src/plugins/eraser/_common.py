@@ -4,8 +4,15 @@ from typing import List
 from common.selective_translator import TextRegion
 
 
-def build_mask(shape, regions: List[TextRegion], dilate: int, image=None) -> np.ndarray:
-    """Build erasure mask covering text regions. Migrated from TextEraser._build_mask."""
+def build_mask(shape, regions: List[TextRegion], dilate: int, image=None,
+               keep_thin_lines: bool = False) -> np.ndarray:
+    """Build erasure mask covering text regions. Migrated from TextEraser._build_mask.
+
+    ``keep_thin_lines`` keeps thin/small stroke components that are otherwise
+    dropped as suspected graphics. Intended for compositing a pre-computed
+    inpaint fill (e.g. LaMA) where smudging is not a concern; the classical
+    OpenCV inpaint path keeps the default (False) to avoid smearing thin lines.
+    """
     h, w = shape
     mask = np.zeros((h, w), dtype=np.uint8)
     for region in regions:
@@ -15,7 +22,7 @@ def build_mask(shape, regions: List[TextRegion], dilate: int, image=None) -> np.
         y2 = min(h, int(region.bbox[3]) + dilate)
         if image is not None and (x2 - x1) > 2 and (y2 - y1) > 2:
             roi = image[y1:y2, x1:x2]
-            text_mask = text_pixel_mask(roi, region, x1, y1)
+            text_mask = text_pixel_mask(roi, region, x1, y1, keep_thin_lines=keep_thin_lines)
             if text_mask is not None:
                 mask[y1:y2, x1:x2] = np.maximum(mask[y1:y2, x1:x2], text_mask)
                 continue
@@ -23,7 +30,7 @@ def build_mask(shape, regions: List[TextRegion], dilate: int, image=None) -> np.
     return mask
 
 
-def text_pixel_mask(roi, region, ox, oy):
+def text_pixel_mask(roi, region, ox, oy, keep_thin_lines: bool = False):
     """Build pixel-level text mask. Migrated from TextEraser._text_pixel_mask."""
     try:
         import cv2
@@ -69,7 +76,9 @@ def text_pixel_mask(roi, region, ox, oy):
             min_dim = min(bw, bh)
             max_dim = max(bw, bh)
             is_thin_line = min_dim <= 2 and max_dim > 15
-            if area < 10 or fill_ratio < 0.1 or is_thin_line:
+            if fill_ratio < 0.1:
+                continue
+            if not keep_thin_lines and (area < 10 or is_thin_line):
                 continue
             filtered[labels == i] = 255
         tmask = filtered
