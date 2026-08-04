@@ -74,7 +74,7 @@ class SelectiveTranslator:
         self._url_pattern = re.compile(r'https?://\S+|www\.\S+')
         self._code_pattern = re.compile(r'^[A-Z0-9][-A-Z0-9]{4,}$')  # product codes
         self._spec_pattern = re.compile(
-            r'\d+\s*(GB|MB|TB|KB|GHz|MHz|Hz|MP|W|V|A|mAh|mm|cm|m|kg|g|mg|L|ml|寸|英寸|像素|核|线程)'
+            r'\d+[\.\d]*\s*(GB|MB|TB|KB|GHz|MHz|Hz|MP|W|V|A|mAh|mm|cm|m|kg|g|mg|L|ml|寸|英寸|像素|核|线程)'
             r'|\d+[\.\d]*[\"″\']'  # screen sizes like 6.7"
         )
         self._trademark_pattern = re.compile(r'[®™©]')
