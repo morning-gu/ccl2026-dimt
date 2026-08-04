@@ -51,6 +51,9 @@ def main():
         cfg.output_dir = args.output_dir
     if args.target_langs:
         cfg.target_langs = args.target_langs
+    # Derive per-solution output dir if not explicitly set
+    if not cfg.output_dir or cfg.output_dir == "outputs/results":
+        cfg.output_dir = f"outputs/results_{cfg.solution_name}"
     for stage in STAGE_NAMES:
         val = getattr(args, stage)
         if val:

@@ -20,7 +20,7 @@ class RapidOCRPlugin(IOCRPlugin):
     def __init__(self, config: PipelineConfig):
         self.config = config
         self._ocr = None
-        self._symbol_chars = {"?", "?", "?", "?", "?", "?", "?", "+", "?", "?", "?"}
+        self._symbol_chars = {"十", "✚", "✛", "✜", "✝", "†", "‡", "+", "＋", "✠", "✡"}
 
     def _init_rapidocr(self):
         from rapidocr_onnxruntime import RapidOCR

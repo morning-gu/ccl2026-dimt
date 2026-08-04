@@ -71,7 +71,7 @@ class AnyText2RendererPlugin(IRendererPlugin):
         text_colors = " ".join(color_parts)
         params = {
             "mode": "edit",
-            "sort_priority": "??",
+            "sort_priority": "↕↓→",
             "show_debug": False,
             "revise_pos": False,
             "image_count": 1,
