@@ -174,6 +174,8 @@ class TextEraser:
        separate text from background, then filters out thin connected
        components (e.g. measurement lines) by fill-ratio.  Falls back to
        border-based thresholding when no polygon is present.
+       CC filtering removes: noise (area < 10), diagonal lines (fill-ratio
+       < 0.1), and thin straight lines (min dimension <= 2, max > 15).
        """
        try:
            import cv2
@@ -213,7 +215,8 @@ class TextEraser:
                thresh = max(40, int(np.std(border) * 2))
                tmask = (diff > thresh).astype(np.uint8) * 255
 
-           # -- Filter thin connected components (remove lines, keep glyphs) --
+           # CC filter on thresholded mask: remove thin lines (low
+           # fill-ratio or very narrow) and noise (tiny area), keep text glyphs.
            num, labels, stats, _ = cv2.connectedComponentsWithStats(tmask, connectivity=8)
            filtered = np.zeros_like(tmask)
            for i in range(1, num):
@@ -221,10 +224,14 @@ class TextEraser:
                bw = stats[i, cv2.CC_STAT_WIDTH]
                bh = stats[i, cv2.CC_STAT_HEIGHT]
                fill_ratio = area / max(1, bw * bh)
-               if area < 10 or fill_ratio < 0.1:
-                   continue
+               min_dim = min(bw, bh)
+               max_dim = max(bw, bh)
+               is_thin_line = min_dim <= 2 and max_dim > 15
+               if area < 10 or fill_ratio < 0.1 or is_thin_line:
+                  continue
                filtered[labels == i] = 255
            tmask = filtered
+
 
            # Dilate to cover anti-aliased text edges.
            k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
