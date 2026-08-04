@@ -1,32 +1,20 @@
-"""AnyTrans-faithful translator for Solution A (pure few-shot, no CoT).
-
-Implements the AnyTrans translation strategy (Section 3.2 of the AnyTrans
-paper, Qian et al. 2024, arXiv:2406.11432):
-
-  - Concatenate all text regions using <boxidx></boxidx> HTML-style tags to
-    retain positional information across the image (Section 3.2).
-  - 5-shot demonstrations PER LANGUAGE PAIR, exactly as the paper specifies
-    ("we use five-shot demonstrations for each language pair"), rather than
-    a single universal zh->en template reused for every target.
-  - Pure few-shot instruction prompt. No Chain-of-Thought reasoning, no
-    e-commerce system prompt. CoT is an HCIIT technique (Fu et al. 2024) and
-    is intentionally excluded so Solution A stays faithful to the paper.
-  - LLM-only configuration (no VLM image context). The paper's VLM branch is
-    an optional enhancement; Solution A matches the paper's LLM-only mode and
-    does not introduce VLM here.
-
-This module is Solution-A-specific and independent from
-common/translator.py, which serves Solutions B and C with their own
-CoT / VLM strategies.
-"""
+"""AnyTrans few-shot translator plugin (Solution A)."""
 import logging
 import re
 from typing import List
 
+from interfaces.base import StageType
+from interfaces.translator import ITranslatorPlugin
+from plugins.registry import register_plugin
 from common.config import PipelineConfig, TARGET_LANGUAGES
 from common.selective_translator import TextRegion
 
 logger = logging.getLogger(__name__)
+
+import re
+from typing import List
+
+
 
 
 # Per-language-pair 5-shot demonstrations (source zh -> target).
@@ -107,7 +95,8 @@ FEW_SHOT_EXAMPLES = {
 _FALLBACK_LANG = "en"
 
 
-class AnyTransTranslator:
+@register_plugin(StageType.TRANSLATOR, "anytrans")
+class AnyTransTranslatorPlugin(ITranslatorPlugin):
     """AnyTrans-faithful few-shot translator (Solution A only).
 
     Translates all translatable regions in a single API call using the
@@ -238,6 +227,7 @@ class AnyTransTranslator:
         self,
         regions: List[TextRegion],
         target_lang: str,
+        image_context: str = "",  # accepted but ignored
     ) -> List[TextRegion]:
         """Translate all translatable regions in one batched API call.
 

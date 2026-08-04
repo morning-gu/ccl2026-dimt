@@ -1,0 +1,14 @@
+extends: base.yaml
+solution_name: solution_a
+
+plugins:
+  ocr: rapidocr
+  classifier: selective
+  style_extractor: noop
+  context_analyzer: noop
+  product_classifier: noop
+  translator: anytrans
+  eraser: sd_inpaint
+  box_resizer: anytrans
+  renderer: anytext2
+  quality_checker: noop

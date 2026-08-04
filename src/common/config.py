@@ -54,8 +54,22 @@ class PipelineConfig:
     """Pipeline configuration."""
     input_dir: str = ""
     output_dir: str = ""
+    solution_name: str = "default"
     source_lang: str = "zh"
     target_langs: List[str] = field(default_factory=lambda: ["en", "es", "pt", "ja", "fr"])
+    # Plugin composition: maps stage name -> plugin name
+    plugins: Dict[str, str] = field(default_factory=lambda: {
+        "ocr": "rapidocr",
+        "classifier": "selective",
+        "style_extractor": "noop",
+        "context_analyzer": "noop",
+        "product_classifier": "noop",
+        "translator": "context_aware",
+        "eraser": "opencv",
+        "box_resizer": "noop",
+        "renderer": "pil",
+        "quality_checker": "noop",
+    })
     # OCR settings
     ocr_det_model: str = "PP-OCRv4"
     ocr_rec_model: str = "PP-OCRv4"

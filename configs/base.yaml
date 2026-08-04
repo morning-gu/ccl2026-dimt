@@ -1,0 +1,32 @@
+source_lang: zh
+target_langs: [en, es, pt, ja, fr]
+
+translation_model: GLM-5.1
+translation_api_base: http://127.0.0.1:8082/v1
+translation_api_key: ""
+translation_max_tokens: 2048
+translation_temperature: 0.3
+translation_verify_ssl: true
+
+vlm_model: qwen3.7-plus
+
+selective_enabled: true
+preserve_brand: true
+preserve_logo: true
+logo_detection_threshold: 0.7
+
+device: cuda
+batch_size: 4
+
+debug_enabled: true
+debug_ocr: true
+debug_mask: true
+debug_erased: true
+debug_translation: true
+debug_render: true
+debug_original: true
+debug_classification: true
+debug_style: true
+debug_context: true
+debug_product: true
+debug_quality: true

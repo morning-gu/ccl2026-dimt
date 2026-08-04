@@ -1,0 +1,40 @@
+"""LaMA inpainting erasure plugin (Solution B)."""
+import logging
+import numpy as np
+from typing import List
+from interfaces.base import StageType
+from interfaces.eraser import IEraserPlugin
+from plugins.registry import register_plugin
+from common.config import PipelineConfig
+from common.selective_translator import TextRegion
+from ._common import build_mask
+
+logger = logging.getLogger(__name__)
+
+
+@register_plugin(StageType.ERASER, "lama")
+class LaMaEraserPlugin(IEraserPlugin):
+    """LaMA inpainting, migrated from TextEraser._erase_lama."""
+
+    def __init__(self, config: PipelineConfig):
+        self.config = config
+        self._model = None
+
+    def _init_lama(self):
+        from simple_lama_inpainting import SimpleLAMA
+        self._model = SimpleLAMA()
+        logger.info("LaMA erasure model initialized")
+
+    def erase(self, image: np.ndarray, regions: List[TextRegion], dilate_pixels: int = 0) -> np.ndarray:
+        if not regions:
+            return image
+        if self._model is None:
+            self._init_lama()
+        mask = build_mask(
+            image.shape[:2], regions,
+            dilate_pixels or self.config.erasure_dilate_pixels,
+            image=image,
+        )
+        from PIL import Image
+        result = self._model(Image.fromarray(image), Image.fromarray(mask))
+        return np.array(result)

@@ -1,192 +1,69 @@
 #!/usr/bin/env python3
-"""Run all three solutions on the competition dataset."""
+"""Backward-compatible wrapper: delegates to run.py with YAML configs.
+
+Three Solutions are now pure YAML configs (configs/solution_a.yaml, etc.).
+This wrapper preserves the old CLI interface by mapping --solution to the
+corresponding config file and invoking run.py as a subprocess.
+"""
 import os
 import sys
-import time
-import logging
+import subprocess
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-os.environ["PYTHONIOENCODING"] = "utf-8"
-sys.stdout.reconfigure(encoding="utf-8")
-# Fix SSL certificate verification on macOS (uv-managed Python)
-if "SSL_CERT_FILE" not in os.environ:
-    try:
-        import certifi
-        os.environ["SSL_CERT_FILE"] = certifi.where()
-    except ImportError:
-        pass
-sys.stderr.reconfigure(encoding="utf-8")
-from common.config import PipelineConfig, TARGET_LANGUAGES
-from common.config import load_config_from_env
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-logger = logging.getLogger("run_all")
-# Resolve project root relative to this script
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-INPUT_DIR = str(_PROJECT_ROOT / "dataset" / "source_images")
-OUTPUT_BASE = str(_PROJECT_ROOT / "outputs")
+
+src_dir = Path(__file__).resolve().parent
+config_dir = src_dir.parent / "configs"
+project_root = src_dir.parent
+
+CONFIG_MAP = {
+    "solution_a": "solution_a.yaml",
+    "solution_b": "solution_b.yaml",
+    "solution_c": "solution_c.yaml",
+}
 
 
-def get_config(solution_name, input_dir=None, output_dir=None, target_langs=None):
-    cfg = PipelineConfig(
-        input_dir=INPUT_DIR,
-        output_dir=os.path.join(OUTPUT_BASE, f"results_{solution_name}"),
-        target_langs=["en", "es", "pt", "ja", "fr"],
-        debug_dir=os.path.join(OUTPUT_BASE, "debug", solution_name),
-    )
-    # Override from .env / environment variables
-    cfg = load_config_from_env(cfg)
-    # CLI args take priority over env vars
-    if input_dir:
-        cfg.input_dir = input_dir
-    if output_dir:
-        cfg.output_dir = output_dir
-    if target_langs:
-        cfg.target_langs = target_langs
-    # Solution-specific backends (NOT configurable via env vars).
-    #
-    # Design intent (see README):
-    #   A: PERT stroke-level erasure + AnyText2 rendering (AnyTrans-faithful)
-    #   B: LaMA erasure + AnyText2 rendering + VLM context (highest quality)
-    #   C: OpenCV erasure + PIL rendering (fast, no GPU)
-    #
-    # Heavy backends (anytext2/lama/pert) raise if deps are missing;
-    # there is no silent fallback to PIL/OpenCV.
-    if solution_name == "solution_a":
-        cfg.render_model = "anytext2"
-        # PERT = stroke-level scene text removal (AnyTrans Section 3.3).
-        # Falls back to sd_inpaint if PERT_REPO/PERT_CKPT not set.
-        import os as _os
-        if _os.environ.get("PERT_REPO") and _os.environ.get("PERT_CKPT"):
-            cfg.erasure_model = "pert"
-        else:
-            cfg.erasure_model = "sd_inpaint"
-            logger.warning(
-                "PERT_REPO/PERT_CKPT not set; using sd_inpaint fallback. "
-                "For AnyTrans-faithful stroke-level erasure, clone "
-                "https://github.com/wangyuxin87/PERT and set PERT_REPO/PERT_CKPT."
-            )
-    elif solution_name == "solution_b":
-        cfg.render_model = "anytext2"
-        cfg.erasure_model = "lama"
-        cfg.translation_use_vlm = True
-        cfg.translation_use_cot = True
-    elif solution_name == "solution_c":
-        cfg.render_model = "pil"
-        cfg.erasure_model = "opencv"
-    return cfg
-def run_solution(solution_name, max_images=0, skip_existing=False,
-                 input_dir=None, output_dir=None, target_langs=None):
-    logger.info("=" * 60)
-    logger.info("Running %s", solution_name.upper())
-    logger.info("=" * 60)
-    cfg = get_config(solution_name, input_dir=input_dir,
-                    output_dir=output_dir, target_langs=target_langs)
-    os.makedirs(cfg.output_dir, exist_ok=True)
-    if solution_name == "solution_a":
-        from solution_a.pipeline import SolutionAPipeline
-        pipeline = SolutionAPipeline(cfg)
-    elif solution_name == "solution_b":
-        from solution_b.pipeline import SolutionBPipeline
-        pipeline = SolutionBPipeline(cfg)
-    elif solution_name == "solution_c":
-        from solution_c.pipeline import SolutionCPipeline
-        pipeline = SolutionCPipeline(cfg)
-    input_path = Path(cfg.input_dir)
-    if input_path.is_file():
-        # Single image file specified directly
-        image_files = [input_path]
-    elif input_path.is_dir():
-        image_files = []
-        for ext in cfg.supported_image_formats:
-            image_files.extend(input_path.glob(f"*{ext}"))
-            image_files.extend(input_path.glob(f"*{ext.upper()}"))
-        image_files = sorted(set(image_files))
-    else:
-        logger.error("Input path does not exist: %s", input_path)
-        return {}
-    if max_images > 0:
-        image_files = image_files[:max_images]
-    # Skip images that already have all language outputs
-    if skip_existing:
-        original_count = len(image_files)
-        filtered = []
-        for img_path in image_files:
-            all_exist = True
-            for lang_code in cfg.target_langs:
-                lang_dir = os.path.join(cfg.output_dir, lang_code)
-                out_path = os.path.join(lang_dir, img_path.name)
-                if not os.path.exists(out_path):
-                    all_exist = False
-                    break
-            if not all_exist:
-                filtered.append(img_path)
-        skipped = original_count - len(filtered)
-        if skipped > 0:
-            logger.info("Skipping %d already-processed images", skipped)
-        image_files = filtered
-    logger.info("Processing %d images x %d languages with %s", len(image_files), len(cfg.target_langs), solution_name)
-    start_time = time.time()
-    all_results = {}
-    for i, img_path in enumerate(image_files):
-        logger.info("[%d/%d] %s", i + 1, len(image_files), img_path.name)
-        try:
-            results = pipeline.process_image_all_languages(str(img_path), cfg.output_dir)
-            all_results[str(img_path)] = results
-        except Exception as e:
-            logger.error("Failed: %s: %s", img_path, e)
-            import traceback
-            traceback.print_exc()
-    elapsed = time.time() - start_time
-    n_processed = len(all_results)
-    n_total = n_processed * len(cfg.target_langs)
-    logger.info("%s completed: %d images x %d langs = %d outputs in %.1fs", solution_name.upper(), n_processed, len(cfg.target_langs), n_total, elapsed)
-    # Generate debug summary
-    try:
-        summary_path = pipeline.debug.save_summary()
-        if summary_path:
-            logger.info("Debug summary: %s", summary_path)
-    except Exception as e:
-        logger.warning("Debug summary failed: %s", e)
-    try:
-        zip_path = pipeline.create_submission(cfg.output_dir)
-        logger.info("Submission zip: %s", zip_path)
-    except Exception as e:
-        logger.error("Packaging failed: %s", e)
-    return all_results
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(
-        description="Run DIMT solutions on the competition dataset or custom images."
+        description="Run DIMT solutions. Backward-compatible wrapper."
     )
-    parser.add_argument("--solution", choices=["solution_a", "solution_b", "solution_c", "all"], default="all")
-    parser.add_argument("--input_dir", default=None,
-                        help="Source image path: a single image file or a directory of images. "
-                             "Defaults to <project>/dataset/source_images")
-    parser.add_argument("--output_dir", default=None,
-                        help="Directory for translated output images. "
-                             "Defaults to <project>/outputs/results_<solution>")
-    parser.add_argument("--target_langs", nargs="+", default=None,
-                        help="Target language codes (e.g. en es pt ja fr). "
-                             "Defaults to en es pt ja fr")
+    parser.add_argument(
+        "--solution", choices=["solution_a", "solution_b", "solution_c", "all"],
+        default="all", help="Which solution to run"
+    )
+    parser.add_argument("--input_dir", default=None)
+    parser.add_argument("--output_dir", default=None)
+    parser.add_argument("--target_langs", nargs="+", default=None)
     parser.add_argument("--max_images", type=int, default=0)
-    parser.add_argument("--skip_existing", action="store_true", help="Skip images that already have output")
+    parser.add_argument("--skip_existing", action="store_true")
     args = parser.parse_args()
-    solutions = ["solution_a", "solution_b", "solution_c"] if args.solution == "all" else [args.solution]
+
+    solutions = list(CONFIG_MAP.keys()) if args.solution == "all" else [args.solution]
     for sol in solutions:
-        # When running "all" with a custom output_dir, create per-solution
-        # subdirectories to avoid overwriting each other.
-        sol_output = args.output_dir
-        if args.output_dir and args.solution == "all":
-            sol_output = os.path.join(args.output_dir, f"results_{sol}")
-        run_solution(
-            sol,
-            max_images=args.max_images,
-            skip_existing=args.skip_existing,
-            input_dir=args.input_dir,
-            output_dir=sol_output,
-            target_langs=args.target_langs,
-        )
+        config_path = config_dir / CONFIG_MAP[sol]
+        cmd = [sys.executable, str(src_dir / "run.py"), "--config", str(config_path)]
+
+        if args.input_dir:
+            cmd += ["--input_dir", args.input_dir]
+        else:
+            cmd += ["--input_dir", str(project_root / "dataset" / "source_images")]
+
+        if args.output_dir:
+            out = args.output_dir
+            if args.solution == "all":
+                out = os.path.join(out, f"results_{sol}")
+            cmd += ["--output_dir", out]
+        else:
+            cmd += ["--output_dir", str(project_root / "outputs" / f"results_{sol}")]
+
+        if args.target_langs:
+            cmd += ["--target_langs"] + args.target_langs
+        if args.max_images > 0:
+            cmd += ["--max_images", str(args.max_images)]
+        if args.skip_existing:
+            cmd += ["--skip_existing"]
+
+        print(f"{'=' * 60}")
+        print(f"Running {sol.upper()}")
+        print(f"{'=' * 60}")
+        subprocess.run(cmd, check=False)

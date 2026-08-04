@@ -1,0 +1,17 @@
+extends: base.yaml
+solution_name: solution_b
+
+plugins:
+  ocr: rapidocr
+  classifier: selective
+  style_extractor: style
+  context_analyzer: vlm
+  product_classifier: noop
+  translator: context_aware
+  eraser: lama
+  box_resizer: noop
+  renderer: anytext2
+  quality_checker: noop
+
+translation_use_vlm: true
+translation_use_cot: true
