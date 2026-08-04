@@ -1,0 +1,10 @@
+{
+  "_comment": "Per-image parameter overrides. Keys are image stems (e.g. '010'). Only override parameters that differ from defaults. Images not listed here use default behavior, so changes to one image never affect another.",
+  "009": {
+    "erasure_threshold_method": "otsu",
+    "render_color_method": "percentile",
+    "render_color_percentile": 90,
+    "ocr_merge_adjacent": true,
+    "ocr_merge_max_gap": 1.5
+  }
+}

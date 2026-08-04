@@ -50,6 +50,7 @@ from common.translator import ContextAwareTranslator
 from common.renderer import TextEraser, TextRenderer
 from common.submission import SubmissionPackager
 from common.debug_saver import DebugSaver
+from common.image_config import ImageConfig, ImageOverrides
 
 logger = logging.getLogger("solution_c")
 
@@ -339,6 +340,9 @@ class SolutionCPipeline:
         self.config = config or PipelineConfig()
         self.config = load_config_from_env(self.config)
         # Model backends are set by the caller via PipelineConfig,
+        # Per-image override config (isolates tuning per image).
+        self.image_config = ImageConfig.load()
+
         # run_all_solutions.py, or env vars. Do not override them here.
 
         # Initialize components
@@ -414,12 +418,12 @@ class SolutionCPipeline:
         mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
                                      dilate=self.config.erasure_dilate_pixels)
         self.debug.save_mask(mask, image_stem, target_lang)
-        erased_image = self.eraser.erase(image, translatable_regions)
+        erased_image = self.eraser.erase(image, translatable_regions, image_stem=image_stem)
         logger.info("  Erasure (OpenCV): %d regions erased", len(translatable_regions))
         self.debug.save_erased(erased_image, image_stem, target_lang)
 
         # Step 6: Render with PIL (fast, template-aware)
-        result_image = self.renderer.render(erased_image, translatable_regions, style_reference=image)
+        result_image = self.renderer.render(erased_image, translatable_regions, style_reference=image, image_stem=image_stem)
         logger.info("  Rendering (PIL): completed")
         self.debug.save_render_result(result_image, image_stem, target_lang)
 
@@ -499,7 +503,7 @@ class SolutionCPipeline:
         mask = DebugSaver.build_mask(image.shape[:2], translatable_regions,
                                      dilate=self.config.erasure_dilate_pixels)
         self.debug.save_mask(mask, stem, "all")
-        erased_image = self.eraser.erase(image, translatable_regions)
+        erased_image = self.eraser.erase(image, translatable_regions, image_stem=stem)
         logger.info("  Erasure (OpenCV): %d regions erased", len(translatable_regions))
         self.debug.save_erased(erased_image, stem, "all")
 
@@ -524,7 +528,7 @@ class SolutionCPipeline:
 
                 # Render
                 lang_translatable = [r for r in lang_regions if r.is_translatable]
-                result_image = self.renderer.render(erased_image, lang_translatable, style_reference=image)
+                result_image = self.renderer.render(erased_image, lang_translatable, style_reference=image, image_stem=stem)
                 logger.info("    Rendering (PIL): completed")
                 self.debug.save_render_result(result_image, stem, lang_code)
 
