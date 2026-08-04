@@ -21,6 +21,9 @@ Thumbs.db
 
 # Large generated outputs (tracked via LFS selectively)
 outputs/
+src/outputs/
+*.zip
+submission.zip
 
 # Debug test artifacts
 debug/
