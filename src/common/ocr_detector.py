@@ -85,65 +85,7 @@ class OCRDetector:
         # Filter single-char graphical symbols (cross/十字架 etc.)
         # OCR often misidentifies cross shapes as the character "十".
         regions = [r for r in regions if not self._is_likely_symbol(r)]
-        # Re-recognize long text regions that may have been truncated
-        regions = self._rerecognize_long_regions(image, regions)
         logger.debug("RapidOCR detected %d regions", len(regions))
-        return regions
-
-    def _rerecognize_long_regions(self, image: np.ndarray,
-                                  regions: List[TextRegion],
-                                  min_width: int = 400) -> List[TextRegion]:
-        """Re-recognize wide text regions by splitting and re-reading.
-
-        PP-OCRv4's recognizer has a max output length (~25 chars).  Wide
-        regions with long text get truncated.  This method splits wide
-        crops into overlapping halves, recognizes each separately, and
-        concatenates the results when the combined text is longer.
-        """
-        try:
-            import cv2
-        except ImportError:
-            return regions
-
-        for region in regions:
-            x1, y1, x2, y2 = [int(v) for v in region.bbox[:4]]
-            w = x2 - x1
-            if w < min_width:
-                continue
-            # Crop with small padding
-            pad = 3
-            h_img, w_img = image.shape[:2]
-            cx1 = max(0, x1 - pad)
-            cy1 = max(0, y1 - pad)
-            cx2 = min(w_img, x2 + pad)
-            cy2 = min(h_img, y2 + pad)
-            crop = image[cy1:cy2, cx1:cx2]
-            if crop.shape[0] < 5 or crop.shape[1] < 5:
-                continue
-            # Split into overlapping halves
-            cw = crop.shape[1]
-            overlap = max(10, int(cw * 0.08))
-            mid = cw // 2
-            left = crop[:, :mid + overlap]
-            right = crop[:, mid - overlap:]
-            # Recognize each half
-            try:
-                rec_results, _ = self._ocr.text_rec([left, right])
-            except Exception:
-                continue
-            if len(rec_results) < 2:
-                continue
-            left_text, left_conf = rec_results[0]
-            right_text, right_conf = rec_results[1]
-            # Concatenate; the overlap may cause duplicate chars at the
-            # boundary, but more text is better than truncated text.
-            combined = left_text + right_text
-            # Only replace if the combined text is meaningfully longer
-            if len(combined) > len(region.text) + 2:
-                region.text = combined
-                region.confidence = min(left_conf, right_conf)
-                logger.debug("Re-recognized long region: %d -> %d chars",
-                             len(region.text), len(combined))
         return regions
 
     def _is_likely_symbol(self, region: TextRegion) -> bool:

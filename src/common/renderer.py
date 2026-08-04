@@ -208,20 +208,12 @@ class TextEraser:
                else:
                    tmask = light_sel.astype(np.uint8) * 255
            else:
-               # -- Fallback: Otsu threshold on full ROI --
-               # More robust than border-based for multi-line merged
-               # regions where the bbox border contains text pixels.
-               _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+               # -- Fallback: border-based threshold --
                border = np.concatenate([gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]])
-               bg_gray = float(np.median(border))
-               dark_sel = binary == 0
-               light_sel = binary == 255
-               dark_mean = float(gray[dark_sel].mean()) if dark_sel.any() else bg_gray
-               light_mean = float(gray[light_sel].mean()) if light_sel.any() else bg_gray
-               if abs(dark_mean - bg_gray) > abs(light_mean - bg_gray):
-                   tmask = dark_sel.astype(np.uint8) * 255
-               else:
-                   tmask = light_sel.astype(np.uint8) * 255
+               bg = float(np.median(border))
+               diff = np.abs(gray.astype(np.int16) - bg)
+               thresh = max(40, int(np.std(border) * 2))
+               tmask = (diff > thresh).astype(np.uint8) * 255
 
            # CC filter on thresholded mask: remove thin lines (low
            # fill-ratio or very narrow) and noise (tiny area), keep text glyphs.
@@ -620,11 +612,7 @@ class _PilStyleHelper:
                 poly = getattr(region, "bbox_poly", None)
                 style["color"] = _PilStyleHelper._text_color(roi, poly, x1, y1)
             if not style.get("font_size"):
-                line_h = style.get("line_height")
-                if line_h:
-                    style["font_size"] = max(10, int(line_h * 0.8))
-                else:
-                    style["font_size"] = max(10, int((y2 - y1) * 0.75))
+                style["font_size"] = max(10, int((y2 - y1) * 0.75))
         except Exception:
             pass
         return style
@@ -661,23 +649,7 @@ class _PilStyleHelper:
             # Text is the class that contrasts *more* with the local background.
             dark_contrast = float(np.linalg.norm(dark_mean - bg))
             light_contrast = float(np.linalg.norm(light_mean - bg))
-            is_dark_text = dark_contrast > light_contrast
-            text_mask = dark_m if is_dark_text else light_m
-            # For mixed-color regions (e.g. gray label + black value), the
-            # mean pulls toward the less-contrasting color.  Bias toward the
-            # most contrasting pixels by taking the median of the top-50%
-            # contrast pixels within the text class.
-            if text_mask.any():
-                text_pixels = roi[text_mask].reshape(-1, 3).astype(np.float32)
-                pixel_contrasts = np.linalg.norm(text_pixels - bg, axis=1)
-                pct = np.percentile(pixel_contrasts, 90)
-                strong = pixel_contrasts >= pct
-                if strong.any():
-                    text_color = np.median(text_pixels[strong], axis=0)
-                else:
-                    text_color = text_pixels.mean(axis=0)
-            else:
-                text_color = dark_mean if is_dark_text else light_mean
+            text_color = dark_mean if dark_contrast > light_contrast else light_mean
             return tuple(int(c) for c in np.clip(text_color, 0, 255))
         except Exception:
             return (0, 0, 0)
