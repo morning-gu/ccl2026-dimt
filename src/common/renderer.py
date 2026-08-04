@@ -1,4 +1,4 @@
-﻿"""Text erasure and rendering, single-backend per solution (no degradation).
+"""Text erasure and rendering, single-backend per solution (no degradation).
 Each solution pins one erasure backend and one render backend via config:
     Solution A (AnyTrans):  erasure=sd_inpaint  render=anytext2
     Solution B (AnyText2):  erasure=lama        render=anytext2
@@ -127,7 +127,7 @@ class TextEraser:
         if self.config.device == "cuda":
             self._pert_model = self._pert_model.cuda()
         logger.info("PERT (scene text removal) initialized from %s", ckpt)
-    def erase(self, image, regions, dilate_pixels=0, image_stem=None):
+    def erase(self, image, regions, dilate_pixels=0):
         if not regions:
             return image
         # Lazily init the configured backend. No fallback: missing dep raises.
@@ -139,7 +139,7 @@ class TextEraser:
             self._init_strokenet()
         elif self._backend == "pert" and self._pert_model is None:
             self._init_pert()
-        mask = self._build_mask(image.shape[:2], regions, dilate_pixels or self.config.erasure_dilate_pixels, image=image, image_stem=image_stem)
+        mask = self._build_mask(image.shape[:2], regions, dilate_pixels or self.config.erasure_dilate_pixels, image=image)
         if self._backend == "lama":
             return self._erase_lama(image, mask)
         if self._backend == "sd_inpaint":
@@ -151,7 +151,7 @@ class TextEraser:
         if self._backend == "pert":
             return self._erase_pert(image, mask)
         raise ValueError(f"Unknown erasure_model: {self._backend!r}")
-    def _build_mask(self, shape, regions, dilate, image=None, image_stem=None):
+    def _build_mask(self, shape, regions, dilate, image=None):
         h, w = shape
         mask = np.zeros((h, w), dtype=np.uint8)
         for region in regions:
@@ -161,13 +161,13 @@ class TextEraser:
             y2 = min(h, int(region.bbox[3]) + dilate)
             if image is not None and (x2 - x1) > 2 and (y2 - y1) > 2:
                 roi = image[y1:y2, x1:x2]
-                text_mask = self._text_pixel_mask(roi, region, x1, y1, image_stem=image_stem)
+                text_mask = self._text_pixel_mask(roi, region, x1, y1)
                 if text_mask is not None:
                     mask[y1:y2, x1:x2] = np.maximum(mask[y1:y2, x1:x2], text_mask)
                     continue
             mask[y1:y2, x1:x2] = 255
         return mask
-    def _text_pixel_mask(self, roi, region, ox, oy, image_stem=None):
+    def _text_pixel_mask(self, roi, region, ox, oy):
        """Build an erasure mask covering only text strokes, not the full bbox.
 
        Uses Otsu thresholding within the OCR polygon (when available) to
@@ -367,7 +367,7 @@ class TextRenderer:
             self._anytext2 = self._anytext2.cuda(0)
         self._anytext2_repo = repo
         logger.info("AnyText2 model initialized from %s", repo)
-    def render(self, image, regions, style_reference=None, image_stem=None):
+    def render(self, image, regions, style_reference=None):
         if not regions:
             return image
         render_regions = [r for r in regions if r.translated_text]
@@ -409,7 +409,7 @@ class TextRenderer:
         text_colors = " ".join(color_parts)
         params = {
             "mode": "edit",
-            "sort_priority": "鈫斺啎",  # AnyText2 valid: 鈫斺啎 (horizontal-first) or 鈫曗啍 (vertical-first),
+            "sort_priority": "↔↕",  # AnyText2 valid: ↔↕ (horizontal-first) or ↕↔ (vertical-first),
             "show_debug": False,
             "revise_pos": False,
             "image_count": 1,
@@ -442,13 +442,13 @@ class TextRenderer:
             raise RuntimeError(f"AnyText2 rendering failed (rtn_code={rtn_code}): {rtn_warning}")
         return np.array(results[0])[..., ::-1]  # RGB->BGR
     # ---- PIL renderer (Solution C's method) ----
-    def _render_pil(self, image, regions, style_reference=None, image_stem=None):
+    def _render_pil(self, image, regions, style_reference=None):
         from PIL import Image, ImageDraw
         img_pil = Image.fromarray(image)
         draw = ImageDraw.Draw(img_pil)
         for region in regions:
             if (not region.style_info.get("color")) and style_reference is not None:
-                region.style_info = _PilStyleHelper.enrich(region.style_info, style_reference, region, image_stem=image_stem)
+                region.style_info = _PilStyleHelper.enrich(region.style_info, style_reference, region)
             self._draw_single(draw, img_pil, region)
         return np.array(img_pil)
     def _draw_single(self, draw, img_pil, region):
@@ -597,7 +597,7 @@ class TextRenderer:
 class _PilStyleHelper:
     """On-the-fly style extraction for the PIL renderer (Solution C)."""
     @staticmethod
-    def enrich(style_info, image, region, image_stem=None):
+    def enrich(style_info, image, region):
         style = dict(style_info or {})
         try:
             x1, y1, x2, y2 = [max(0, int(v)) for v in region.bbox[:4]]
@@ -610,14 +610,14 @@ class _PilStyleHelper:
                 return style
             if not style.get("color"):
                 poly = getattr(region, "bbox_poly", None)
-                style["color"] = _PilStyleHelper._text_color(roi, poly, x1, y1, image_stem=image_stem)
+                style["color"] = _PilStyleHelper._text_color(roi, poly, x1, y1)
             if not style.get("font_size"):
                 style["font_size"] = max(10, int((y2 - y1) * 0.75))
         except Exception:
             pass
         return style
     @staticmethod
-    def _text_color(roi, polygon=None, ox=0, oy=0, image_stem=None):
+    def _text_color(roi, polygon=None, ox=0, oy=0):
         try:
             import cv2
             if roi.ndim != 3 or roi.shape[0] < 3 or roi.shape[1] < 3:
@@ -626,7 +626,7 @@ class _PilStyleHelper:
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             # -- Estimate the local background colour --
             # When the OCR polygon is available, sample the area *outside*
-            # the polygon (but inside the bbox) 鈥?this is the text's
+            # the polygon (but inside the bbox) — this is the text's
             # immediate background, which may differ from the bbox border
             # (e.g. a light strip behind text in a dark product image).
             bg = None
@@ -653,14 +653,3 @@ class _PilStyleHelper:
             return tuple(int(c) for c in np.clip(text_color, 0, 255))
         except Exception:
             return (0, 0, 0)
-
-
-
-
-
-
-
-
-
-
-
