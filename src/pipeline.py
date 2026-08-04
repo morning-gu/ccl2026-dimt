@@ -152,30 +152,55 @@ class Pipeline:
             results[lang_code] = (out, default_quality) if default_quality else out
         return results
 
-    def run(self, input_dir: Optional[str] = None, output_dir: Optional[str] = None) -> Dict:
-        """Run the pipeline on all images in the input directory."""
+    def run(
+        self,
+        input_dir: Optional[str] = None,
+        output_dir: Optional[str] = None,
+        max_images: int = 0,
+        skip_existing: bool = False,
+    ) -> Dict:
+        """Run the pipeline on all images in the input directory.
+
+        Per-image failures are logged and skipped (best-effort).
+        """
         input_dir = input_dir or self.config.input_dir
         output_dir = output_dir or self.config.output_dir
         if not input_dir or not output_dir:
             raise ValueError("input_dir and output_dir must be specified")
         os.makedirs(output_dir, exist_ok=True)
 
-        input_path = Path(input_dir)
-        if input_path.is_file():
-            files = [input_path]
-        else:
-            files = []
-            for ext in self.config.supported_image_formats:
-                files.extend(input_path.glob(f"*{ext}"))
-                files.extend(input_path.glob(f"*{ext.upper()}"))
-            files = sorted(set(files))
+        files = self._discover_files(input_dir)
+        if max_images > 0:
+            files = files[:max_images]
+        if skip_existing:
+            files = [
+                f for f in files
+                if not all(
+                    os.path.exists(os.path.join(output_dir, lang, f.name))
+                    for lang in self.config.target_langs
+                )
+            ]
 
         all_results = {}
         for i, img in enumerate(files):
             logger.info("[%d/%d] %s", i + 1, len(files), img.name)
-            results = self.process_image_all_languages(str(img), output_dir)
-            all_results[str(img)] = results
+            try:
+                results = self.process_image_all_languages(str(img), output_dir)
+                all_results[str(img)] = results
+            except Exception as e:
+                logger.error("Failed: %s: %s", img, e)
         return all_results
+
+    def _discover_files(self, input_dir: str) -> list:
+        """Discover and sort input image files."""
+        input_path = Path(input_dir)
+        if input_path.is_file():
+            return [input_path]
+        files = []
+        for ext in self.config.supported_image_formats:
+            files.extend(input_path.glob(f"*{ext}"))
+            files.extend(input_path.glob(f"*{ext.upper()}"))
+        return sorted(set(files))
 
     def create_submission(self, output_dir, zip_path=None):
         """Package results into a submission zip."""

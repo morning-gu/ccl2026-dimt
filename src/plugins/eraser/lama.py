@@ -21,8 +21,21 @@ class LaMaEraserPlugin(IEraserPlugin):
         self._model = None
 
     def _init_lama(self):
-        from simple_lama_inpainting import SimpleLAMA
-        self._model = SimpleLAMA()
+        import torch
+        from simple_lama_inpainting import SimpleLama
+
+        # TorchScript models saved on CUDA need map_location='cpu'
+        # when loading on a machine without CUDA (e.g. macOS MPS).
+        _orig_load = torch.jit.load
+        def _patched_load(*args, **kwargs):
+            if "map_location" not in kwargs:
+                kwargs["map_location"] = "cpu"
+            return _orig_load(*args, **kwargs)
+        torch.jit.load = _patched_load
+        try:
+            self._model = SimpleLama()
+        finally:
+            torch.jit.load = _orig_load
         logger.info("LaMA erasure model initialized")
 
     def erase(self, image: np.ndarray, regions: List[TextRegion], dilate_pixels: int = 0) -> np.ndarray:

@@ -1,5 +1,4 @@
 input_dir: dataset/source_images
-output_dir: outputs/results
 source_lang: zh
 target_langs: [en, es, pt, ja, fr]
 

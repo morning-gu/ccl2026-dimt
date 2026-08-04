@@ -8,9 +8,11 @@ Usage:
 """
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.stdout.reconfigure(encoding="utf-8")
@@ -51,8 +53,8 @@ def main():
         cfg.output_dir = args.output_dir
     if args.target_langs:
         cfg.target_langs = args.target_langs
-    # Derive per-solution output dir if not explicitly set
-    if not cfg.output_dir or cfg.output_dir == "outputs/results":
+    # Derive per-solution output dir if not explicitly set via CLI or YAML
+    if not cfg.output_dir:
         cfg.output_dir = f"outputs/results_{cfg.solution_name}"
     for stage in STAGE_NAMES:
         val = getattr(args, stage)
@@ -61,33 +63,10 @@ def main():
             logger.info("Override: %s = %s", stage, val)
 
     pipeline = Pipeline(cfg)
-
-    input_path = Path(cfg.input_dir)
-    if input_path.is_file():
-        files = [input_path]
-    else:
-        files = []
-        for ext in cfg.supported_image_formats:
-            files.extend(input_path.glob(f"*{ext}"))
-            files.extend(input_path.glob(f"*{ext.upper()}"))
-        files = sorted(set(files))
-    if args.max_images > 0:
-        files = files[:args.max_images]
-    if args.skip_existing:
-        files = [
-            f for f in files
-            if not all(
-                os.path.exists(os.path.join(cfg.output_dir, lang, f.name))
-                for lang in cfg.target_langs
-            )
-        ]
-
-    for i, img in enumerate(files):
-        logger.info("[%d/%d] %s", i + 1, len(files), img.name)
-        try:
-            pipeline.process_image_all_languages(str(img), cfg.output_dir)
-        except Exception as e:
-            logger.error("Failed: %s: %s", img, e)
+    pipeline.run(
+        max_images=args.max_images,
+        skip_existing=args.skip_existing,
+    )
 
     try:
         pipeline.debug.save_summary()

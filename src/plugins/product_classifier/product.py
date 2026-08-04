@@ -15,16 +15,16 @@ class ProductClassifierPlugin(IProductClassifierPlugin):
     def __init__(self, config: PipelineConfig):
         self.config = config
         self._type_keywords = {
-            "electronics": ["??", "??", "??", "??", "??", "??", "??", "??",
+            "electronics": ["手机", "电脑", "耳机", "充电", "电池", "屏幕", "内存", "存储",
                            "phone", "laptop", "earphone", "charger", "battery", "screen"],
-            "clothing": ["??", "??", "??", "T?",
+            "clothing": ["衣服", "裤子", "裙子", "鞋", "帽", "T恤", "衬衫",
                         "dress", "pants", "shoes", "shirt", "jacket"],
-            "food": ["??", "??", "??", "??", "??",
+            "food": ["食品", "零食", "饮料", "水果", "茶叶", "咖啡",
                     "snack", "drink", "fruit", "tea", "coffee"],
-            "cosmetics": ["??", "??", "??", "??", "??", "??",
+            "cosmetics": ["口红", "粉底", "面膜", "护肤", "化妆", "香水",
                          "lipstick", "foundation", "mask", "skincare", "perfume"],
-            "home": ["??", "??", "??", "??",
-                    "furniture", "bed", "so" + "fa", "kitchen", "storage"],
+            "home": ["家具", "床", "沙发", "厨具", "收纳", "清洁",
+                    "furniture", "bed", "sofa", "kitchen", "storage"],
         }
 
     def classify(self, image: np.ndarray, regions: List[TextRegion]) -> Tuple[str, str]:
