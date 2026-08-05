@@ -1,0 +1,51 @@
+# Solution F: EasyText multilingual text rendering via FLUX DiT + LoRA.
+#
+# EasyText uses FLUX.1-dev as the base model with a two-stage LoRA strategy:
+#   Stage 1 (pretrain): 1M synthetic multilingual images -> glyph generation
+#   Stage 2 (fine-tune): 20K real images -> text-image blending quality
+#
+# Unlike AnyText2 (SD1.5 U-Net, edit mode), EasyText is generation-only.
+# The plugin uses a generate-then-composite strategy:
+#   1. Generate a full image with EasyText (condition + position + prompt)
+#   2. Composite only the text regions back onto the pre-erased image
+#
+# Model weights (HuggingFace):
+#   FLUX.1-dev       -> black-forest-labs/FLUX.1-dev
+#   EasyText LoRA    -> songyiren725/EasyText (or custom trained)
+#
+# Env vars (.env):
+#   EASYTEXT_REPO_PATH=/path/to/EasyText
+#   EASYTEXT_FLUX_PATH=black-forest-labs/FLUX.1-dev
+#   EASYTEXT_PRETRAIN_LORA=/path/to/pretrain.safetensors
+#   EASYTEXT_FINETUNE_LORA=/path/to/finetune.safetensors
+#
+# VRAM: ~24GB (1024x1024, bfloat16, 20 steps)
+#       ~16GB (with CPU offloading via accelerate)
+#
+# Advantages over AnyText2 (solution_a):
+#   - 10+ language support (vs Chinese+English)
+#   - Higher resolution (1024+ vs 512)
+#   - Irregular region support (TPS alignment)
+#   - Unseen character generalization
+#
+# Trade-offs:
+#   - No native edit mode (composites generated text onto erased image)
+#   - Higher VRAM requirement (~24GB vs ~8GB)
+#   - No explicit color control (style conveyed via prompt only)
+extends: base.yaml
+solution_name: solution_f
+
+plugins:
+  ocr: rapidocr
+  classifier: selective
+  style_extractor: style
+  context_analyzer: vlm
+  product_classifier: noop
+  translator: context_aware
+  eraser: lama
+  box_resizer: anytrans
+  renderer: easytext
+  quality_checker: noop
+
+translation_use_vlm: true
+translation_use_cot: true
