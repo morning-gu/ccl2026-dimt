@@ -24,7 +24,7 @@
 | 3 | `classifier` | `IClassifierPlugin` | `selective`, `ecommerce` | 区域可翻译性分类 |
 | 4 | `context_analyzer` | `IContextAnalyzerPlugin` | `noop`, `vlm` | VLM 图像上下文理解 |
 | 5 | `product_classifier` | `IProductClassifierPlugin` | `noop`, `product` | 产品类型与版式分类 |
-| 6 | `eraser` | `IEraserPlugin` | `opencv`, `lama`, `sd_inpaint`, `pert`, `strokenet` | 原文字擦除/修复 |
+| 6 | `eraser` | `IEraserPlugin` | `opencv`, `lama`, `sd_inpaint`, `pert`, `strokenet`, `sser` | 原文字擦除/修复 |
 | 7 | `translator` | `ITranslatorPlugin` | `context_aware`, `anytrans` | 文本翻译 |
 | 8 | `box_resizer` | `IBoxResizerPlugin` | `noop`, `anytrans` | 文字框尺寸调整 |
 | 9 | `renderer` | `IRendererPlugin` | `pil`, `anytext2` | 译文渲染回填 |
@@ -53,7 +53,7 @@ ccl2026-dimt/
 │   │   ├── context_analyzer/   # vlm
 │   │   ├── product_classifier/ # product
 │   │   ├── translator/         # context_aware, anytrans
-│   │   ├── eraser/             # opencv, lama, sd_inpaint, pert, strokenet
+│   │   ├── eraser/             # opencv, lama, sd_inpaint, pert, strokenet, sser
 │   │   ├── box_resizer/        # anytrans
 │   │   ├── renderer/           # pil, anytext2
 │   │   └── quality_checker/    # basic
