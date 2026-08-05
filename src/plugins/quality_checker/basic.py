@@ -34,7 +34,7 @@ class BasicQualityCheckerPlugin(IQualityCheckerPlugin):
                 x1, y1, x2, y2 = [int(v) for v in r.bbox[:4]]
                 x1, y1 = max(0, x1), max(0, y1)
                 x2, y2 = min(w, x2), min(h, y2)
-            mask[y1:y2, x1:x2] = False
+                mask[y1:y2, x1:x2] = False
             if mask.any():
                 diff = np.abs(original.astype(float) - result.astype(float))
                 bg_diff = np.mean(diff[mask])

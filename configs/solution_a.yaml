@@ -11,4 +11,4 @@ plugins:
   eraser: sd_inpaint
   box_resizer: anytrans
   renderer: anytext2
-  quality_checker: noop
+  quality_checker: competition

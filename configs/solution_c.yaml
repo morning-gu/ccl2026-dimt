@@ -11,4 +11,4 @@ plugins:
   eraser: opencv
   box_resizer: noop
   renderer: pil
-  quality_checker: basic
+  quality_checker: competition

@@ -24,3 +24,4 @@ from .eraser import lama, opencv, sd_inpaint, pert, strokenet  # noqa: E402,F401
 from .box_resizer import anytrans as box_anytrans  # noqa: E402,F401
 from .renderer import anytext2, pil  # noqa: E402,F401
 from .quality_checker import basic  # noqa: E402,F401
+from .quality_checker import competition  # noqa: E402,F401

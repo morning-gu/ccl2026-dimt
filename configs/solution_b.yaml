@@ -11,7 +11,7 @@ plugins:
   eraser: lama
   box_resizer: noop
   renderer: anytext2
-  quality_checker: noop
+  quality_checker: competition
 
 translation_use_vlm: true
 translation_use_cot: true
