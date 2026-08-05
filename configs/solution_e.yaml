@@ -1,0 +1,37 @@
+# Solution E: FLUX-Text end-to-end scene text editing.
+#
+# FluxText performs erase + render in a single diffusion pass, so eraser is
+# set to noop. Requires a separate conda environment:
+#
+#   conda create -n flux_text python=3.10
+#   conda activate flux_text
+#   pip install -r /path/to/FluxText/requirements.txt
+#   pip install flash_attn --no-build-isolation
+#
+# Model weights (HuggingFace):
+#   FLUX.1-Fill-dev  -> black-forest-labs/FLUX.1-Fill-dev
+#   FLUX-Text LoRA   -> GD-ML/FLUX-Text/model_multisize/
+#
+# Env vars (.env):
+#   FLUXTEXT_REPO_PATH=/path/to/FluxText
+#   FLUXTEXT_MODEL_PATH=/path/to/FluxText/model_multisize/flux-text.safetensors
+#   FLUXTEXT_CONFIG_PATH=/path/to/FluxText/train/config/word_multi_size.yaml
+#
+# VRAM: 34GB (512x512) / 25GB (low-VRAM mode)
+extends: base.yaml
+solution_name: solution_e
+
+plugins:
+  ocr: rapidocr
+  classifier: selective
+  style_extractor: style
+  context_analyzer: vlm
+  product_classifier: noop
+  translator: context_aware
+  eraser: noop
+  box_resizer: noop
+  renderer: fluxtext
+  quality_checker: noop
+
+translation_use_vlm: true
+translation_use_cot: true
