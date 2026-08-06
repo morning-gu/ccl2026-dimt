@@ -92,7 +92,7 @@ def _init_model():
             logger.info("Quantization: NF4 (4-bit, needs bitsandbytes)")
         else:
             if quant == "fp8":
-                from optimum.quanto import QuantoConfig
+                from diffusers import QuantoConfig
                 qconfig = QuantoConfig(weights_dtype="float8")
                 logger.info("Quantization: FP8 (8-bit float, needs optimum-quanto)")
             else:  # 8bit
