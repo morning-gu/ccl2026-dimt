@@ -68,6 +68,11 @@ python servers/pert_server.py --host 0.0.0.0 --port 8012
 export SSER_REPO=/path/to/Self-supervised-Text-Erasing
 export SSER_CKPT=/path/to/best_net_G.pth
 python servers/sser_server.py --host 0.0.0.0 --port 8013
+
+# PowerPaint eraser (port 8014)
+# Weights auto-download from HuggingFace; no manual clone needed.
+export POWERPAINT_MODEL_ID=SanityZero/PowerPaint-v2  # optional override
+python servers/powerpaint_server.py --host 0.0.0.0 --port 8014
 ```
 
 ### 3. Point the pipeline at the servers
@@ -81,6 +86,7 @@ ANYTEXT2_API_URL=http://localhost:8003/render
 STROKENET_API_URL=http://localhost:8011/erase
 PERT_API_URL=http://localhost:8012/erase
 SSER_API_URL=http://localhost:8013/erase
+POWERPAINT_API_URL=http://localhost:8014/erase
 ```
 
 Select the plugin in your pipeline config as before (e.g. `renderer: easytext`,
@@ -146,6 +152,7 @@ Response:
 | `strokenet_server.py` | STRNet stroke-level eraser API server |
 | `pert_server.py` | PERT scene text removal API server |
 | `sser_server.py` | SSER (STRnet2) self-supervised eraser API server |
+| `powerpaint_server.py` | PowerPaint prompt-augmented diffusion eraser API server |
 | `requirements.txt` | Common server dependencies (fastapi, uvicorn, etc.) |
 
 ## Notes
