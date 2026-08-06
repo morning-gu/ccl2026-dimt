@@ -1,0 +1,25 @@
+﻿# ============================================================
+# Renderer API server dependencies (shared across all servers)
+# ============================================================
+# Each server also needs its own external repo's dependencies.
+# Install this file first, then the external repo's requirements.
+#
+#   pip install -r servers/requirements.txt
+#   pip install -r EasyText/requirements.txt   # for easytext_server
+#   pip install -r FluxText/requirements.txt   # for fluxtext_server
+#   pip install -r AnyText2/requirements.txt   # for anytext2_server
+# ============================================================
+
+# --- API framework ---
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+
+# --- Image / array (shared with pipeline, but servers are isolated) ---
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# --- FluxText server extras ---
+PyYAML>=6.0
+safetensors>=0.4.0
