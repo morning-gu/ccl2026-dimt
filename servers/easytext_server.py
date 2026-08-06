@@ -16,6 +16,10 @@ Prerequisites:
     "none"       - load everything onto GPU (.to("cuda")), needs ~34GB VRAM
     "model"      - per-component CPU offload (default), needs ~12-16GB VRAM
     "sequential" - per-layer CPU offload, needs ~8-10GB VRAM (slowest)
+  - Set EASYTEXT_QUANT to quantize the transformer for lower VRAM:
+    "none" - no quantization (default)
+    "nf4"  - 4-bit NormalFloat via bitsandbytes, transformer ~6GB
+    "fp8"  - 8-bit float via optimum-quanto, transformer ~12GB
 
 Usage:
   python easytext_server.py --host 0.0.0.0 --port 8001
@@ -71,10 +75,40 @@ def _init_model():
     pretrain_lora = os.environ.get("EASYTEXT_PRETRAIN_LORA", "")
     finetune_lora = os.environ.get("EASYTEXT_FINETUNE_LORA", "")
 
-    pipeline = FluxPipeline.from_pretrained(
-        flux_path,
-        torch_dtype=torch.bfloat16,
-    )
+    quant = os.environ.get("EASYTEXT_QUANT", "none").lower()
+
+    if quant in ("nf4", "fp8"):
+        from diffusers import FluxTransformer2DModel
+
+        if quant == "nf4":
+            from diffusers import BitsAndBytesConfig
+            qconfig = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+            logger.info("Quantization: NF4 (4-bit, needs bitsandbytes)")
+        else:
+            from optimum.quanto import QuantoConfig
+            qconfig = QuantoConfig(weights_dtype="float8")
+            logger.info("Quantization: FP8 (8-bit, needs optimum-quanto)")
+
+        transformer = FluxTransformer2DModel.from_pretrained(
+            flux_path,
+            subfolder="transformer",
+            quantization_config=qconfig,
+            torch_dtype=torch.bfloat16,
+        )
+        pipeline = FluxPipeline.from_pretrained(
+            flux_path,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+        )
+    else:
+        pipeline = FluxPipeline.from_pretrained(
+            flux_path,
+            torch_dtype=torch.bfloat16,
+        )
 
     offload = os.environ.get("EASYTEXT_OFFLOAD", "model").lower()
     if offload == "none":

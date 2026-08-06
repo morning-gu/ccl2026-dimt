@@ -1,4 +1,4 @@
-# Solution F: EasyText multilingual text rendering via FLUX DiT + LoRA.
+﻿# Solution F: EasyText multilingual text rendering via FLUX DiT + LoRA.
 #
 # EasyText uses FLUX.1-dev as the base model with a two-stage LoRA strategy:
 #   Stage 1 (pretrain): 1M synthetic multilingual images -> glyph generation
@@ -25,6 +25,10 @@
 #         none       -> ~34GB (full GPU residency)
 #         model      -> ~12-16GB (per-component offload, default)
 #         sequential -> ~8-10GB (per-layer offload, slowest)
+#       Optional quantization via EASYTEXT_QUANT env var:
+#         none -> no quantization (default)
+#         nf4  -> 4-bit transformer (~6GB, needs bitsandbytes)
+#         fp8  -> 8-bit transformer (~12GB, needs optimum-quanto)
 #
 # Advantages over AnyText2 (solution_a):
 #   - 10+ language support (vs Chinese+English)
