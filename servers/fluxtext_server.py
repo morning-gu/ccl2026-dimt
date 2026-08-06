@@ -175,8 +175,26 @@ def _init_model():
     _flux_config = flux_config
     _repo_path = repo
 
+
     # Device placement / CPU offload
-    if offload == "sequential":
+    if quantize in ("8bit", "nf4", "8bit_all") and offload in ("model", "sequential"):
+        # bitsandbytes quantized transformers cannot be moved to CPU by
+        # enable_*_cpu_offload -- quantized weights stay pinned to GPU,
+        # causing OOM when T5 is also loaded.  Keep everything on GPU.
+        if quantize == "8bit":
+            # Also quantize T5 so transformer+T5 fit in 24GB VRAM:
+            #   8-bit transformer (~12GB) + 8-bit T5 (~5GB) ~ 17GB
+            t5 = getattr(_pipe, "text_encoder_2", None)
+            if t5 is not None:
+                n = _quantize_8bit(t5)
+                logger.info("Auto-quantized T5 to 8-bit (%d layers)", n)
+        _pipe = _pipe.to("cuda")
+        torch.cuda.empty_cache()
+        if quantize == "nf4":
+            logger.info("GPU: NF4 + T5 bf16 (~17GB VRAM)")
+        else:
+            logger.info("GPU: 8-bit transformer + 8-bit T5 (~18GB VRAM)")
+    elif offload == "sequential":
         _pipe.enable_sequential_cpu_offload()
         logger.info("Offload: sequential (per-layer)")
     elif offload == "model":
@@ -193,7 +211,6 @@ def _init_model():
             logger.info("GPU: 8-bit all (~18GB VRAM)")
         else:
             logger.info("GPU: full precision (~34GB VRAM)")
-
     font_path = os.environ.get(
         "FLUXTEXT_FONT_PATH",
         os.path.join(repo, "font", "Arial_Unicode.ttf"),

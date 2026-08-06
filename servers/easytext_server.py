@@ -18,8 +18,8 @@ Prerequisites:
     "sequential" - per-layer CPU offload, needs ~8-10GB VRAM (slowest)
   - Set EASYTEXT_QUANT to quantize the transformer for lower VRAM:
     "none" - no quantization
-    "nf4"  - 4-bit NormalFloat via bitsandbytes, transformer ~6GB
-    "fp8"  - 8-bit float via optimum-quanto, transformer ~12GB (default)
+    "nf4"  - 4-bit NormalFloat via bitsandbytes, transformer ~6GB (default)
+    "fp8"  - 8-bit float via optimum-quanto, transformer ~12GB
     "8bit" - 8-bit int via bitsandbytes, transformer ~12GB
            (direct load from disk, no full-precision CPU RAM needed)
 
@@ -77,7 +77,7 @@ def _init_model():
     pretrain_lora = os.environ.get("EASYTEXT_PRETRAIN_LORA", "")
     finetune_lora = os.environ.get("EASYTEXT_FINETUNE_LORA", "")
 
-    quant = os.environ.get("EASYTEXT_QUANT", "fp8").lower()
+    quant = os.environ.get("EASYTEXT_QUANT", "nf4").lower()
 
     if quant in ("nf4", "fp8", "8bit"):
         from diffusers import FluxTransformer2DModel
