@@ -1,0 +1,35 @@
+# ============================================================
+# PowerPaint Eraser API Server dependencies
+# ============================================================
+# Create a dedicated conda/venv environment on a GPU machine:
+#
+#   conda create -n powerpaint python=3.10 -y
+#   conda activate powerpaint
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   pip install -r servers/powerpaint_requirements.txt
+#   python servers/powerpaint_server.py --host 0.0.0.0 --port 8014
+#
+# Weights (~4GB) auto-download from HuggingFace on first run.
+# No manual repo clone needed.
+# ============================================================
+
+# --- Diffusion model stack ---
+diffusers>=0.27.0
+transformers>=4.40.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+
+# --- API framework ---
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+
+# --- Image / array ---
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# NOTE: Install torch separately BEFORE this file, matching your CUDA version:
+#   CUDA 12.1:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   CUDA 11.8:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# A CPU-only torch will work but is extremely slow (~minutes per image).
