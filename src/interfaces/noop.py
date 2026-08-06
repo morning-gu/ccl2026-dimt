@@ -10,6 +10,8 @@ from .quality_checker import IQualityCheckerPlugin
 from .translator import ITranslatorPlugin
 from .classifier import IClassifierPlugin
 
+from .eraser import IEraserPlugin
+
 
 class NoOpStyleExtractor(IStyleExtractorPlugin):
     def __init__(self, config):
@@ -68,3 +70,17 @@ class NoOpClassifier(IClassifierPlugin):
             r.is_translatable = True
             r.region_type = "text"
         return regions
+
+
+class NoOpEraser(IEraserPlugin):
+    """NoOp eraser: returns the image unchanged.
+
+    Used when the renderer performs erase + render in a single pass
+    (e.g. FluxText), so no separate erasure step is needed.
+    """
+
+    def __init__(self, config):
+        pass
+
+    def erase(self, image, regions, dilate_pixels=0):
+        return image

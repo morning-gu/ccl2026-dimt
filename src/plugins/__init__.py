@@ -5,7 +5,7 @@ from interfaces.noop import (
     NoOpStyleExtractor, NoOpContextAnalyzer,
     NoOpProductClassifier, NoOpBoxResizer, NoOpQualityChecker,
 )
-from interfaces.noop import NoOpTranslator, NoOpClassifier
+from interfaces.noop import NoOpTranslator, NoOpClassifier, NoOpEraser
 
 # Register NoOp plugins
 registry.register(StageType.STYLE_EXTRACTOR, "noop", NoOpStyleExtractor)
@@ -15,6 +15,7 @@ registry.register(StageType.BOX_RESIZER, "noop", NoOpBoxResizer)
 registry.register(StageType.QUALITY_CHECKER, "noop", NoOpQualityChecker)
 registry.register(StageType.TRANSLATOR, "noop", NoOpTranslator)
 registry.register(StageType.CLASSIFIER, "noop", NoOpClassifier)
+registry.register(StageType.ERASER, "noop", NoOpEraser)
 
 # Concrete plugins
 from .ocr import rapidocr  # noqa: E402,F401
