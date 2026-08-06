@@ -9,6 +9,21 @@ Prerequisites:
     - FLUX-Text LoRA weights (GD-ML/FLUX-Text)
     - flash_attn installed
     - pip install fastapi uvicorn pydantic numpy opencv-python Pillow PyYAML safetensors
+    - For quantization: pip install bitsandbytes
+
+Environment variables (server-side):
+  FLUXTEXT_REPO_PATH       Path to FluxText repo root
+  FLUXTEXT_MODEL_PATH      Path to FLUX-Text LoRA weights (.safetensors)
+  FLUXTEXT_CONFIG_PATH     Path to FluxText config YAML
+  FLUXTEXT_FONT_PATH       Path to font file (optional)
+  FLUXTEXT_QUANTIZE        Quantization (direct disk load, bypasses OminiModelFIll):
+                            "8bit" (default, 8-bit transformer, ~12GB CPU RAM),
+                            "nf4" (4-bit transformer, ~6GB CPU RAM),
+                            "none" (full precision via OminiModelFIll, ~34GB RAM),
+                            "8bit_all" (8-bit transformer + T5 encoder)
+  FLUXTEXT_OFFLOAD         CPU offload: "none", "model" (per-component),
+                            "sequential" (per-layer, slowest).
+                            Defaults to "model" when quantize != "none".
 
 Usage:
   python fluxtext_server.py --host 0.0.0.0 --port 8002
@@ -64,40 +79,119 @@ def _init_model():
             "to the LoRA weights and config YAML respectively."
         )
 
+    quantize = os.environ.get("FLUXTEXT_QUANTIZE", "8bit").lower()
+    offload_default = "model" if quantize != "none" else "none"
+
     import yaml
     import torch
     from safetensors.torch import load_file
-    from src.train.model import OminiModelFIll
 
     with open(config_path, "r") as f:
         flux_config = yaml.safe_load(f)
 
+    flux_path = flux_config["flux_path"]
+    dtype = getattr(torch, flux_config["dtype"])
     training_config = flux_config["train"]
-    trainable_model = OminiModelFIll(
-        flux_pipe_id=flux_config["flux_path"],
-        lora_config=training_config["lora_config"],
-        device="cuda",
-        dtype=getattr(torch, flux_config["dtype"]),
-        optimizer_config=training_config["optimizer"],
-        model_config=flux_config.get("model", {}),
-        gradient_checkpointing=training_config.get(
-            "gradient_checkpointing", False
-        ),
-        byt5_encoder_config=training_config.get("byt5_encoder", None),
-    )
 
-    state_dict = load_file(model_path)
-    state_dict_new = {
+    # LoRA weights with remapped keys (common to both loading paths)
+    lora_state_dict = {
         x.replace("lora_A", "lora_A.default")
          .replace("lora_B", "lora_B.default")
          .replace("transformer.", ""): v
-        for x, v in state_dict.items()
+        for x, v in load_file(model_path).items()
     }
-    trainable_model.transformer.load_state_dict(state_dict_new, strict=False)
 
-    _pipe = trainable_model.flux_pipe
+    if quantize in ("8bit", "nf4", "8bit_all"):
+        # Direct quantized loading: bypass OminiModelFIll to avoid
+        # the ~34GB CPU RAM spike from full-precision weight materialization.
+        from diffusers import (
+            BitsAndBytesConfig,
+            FluxFillPipeline,
+            FluxTransformer2DModel,
+        )
+        from peft import LoraConfig
+
+        if quantize == "nf4":
+            qconfig = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=dtype,
+            )
+            logger.info("Direct load: NF4 4-bit transformer (~6GB CPU RAM)")
+        else:
+            qconfig = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_has_fp16_weight=False,
+            )
+            logger.info("Direct load: 8-bit transformer (~12GB CPU RAM)")
+
+        transformer = FluxTransformer2DModel.from_pretrained(
+            flux_path,
+            subfolder="transformer",
+            quantization_config=qconfig,
+            torch_dtype=dtype,
+        )
+        pipeline = FluxFillPipeline.from_pretrained(
+            flux_path,
+            transformer=transformer,
+            torch_dtype=dtype,
+        )
+
+        lora_config = training_config.get("lora_config")
+        if lora_config:
+            pipeline.transformer.add_adapter(LoraConfig(**lora_config))
+        pipeline.transformer.load_state_dict(lora_state_dict, strict=False)
+        logger.info("LoRA weights loaded from %s", model_path)
+
+        if quantize == "8bit_all":
+            t5 = getattr(pipeline, "text_encoder_2", None)
+            if t5 is not None:
+                n = _quantize_8bit(t5)
+                logger.info("Quantized T5: %d Linear layers -> 8-bit", n)
+
+        _pipe = pipeline
+    else:
+        # Full precision via OminiModelFIll (needs ~34GB CPU RAM)
+        load_device = "cpu" if offload != "none" else "cuda"
+        from src.train.model import OminiModelFIll
+
+        trainable_model = OminiModelFIll(
+            flux_pipe_id=flux_path,
+            lora_config=training_config["lora_config"],
+            device=load_device,
+            dtype=dtype,
+            optimizer_config=training_config["optimizer"],
+            model_config=flux_config.get("model", {}),
+            gradient_checkpointing=training_config.get(
+                "gradient_checkpointing", False
+            ),
+            byt5_encoder_config=training_config.get("byt5_encoder", None),
+        )
+        trainable_model.transformer.load_state_dict(lora_state_dict, strict=False)
+        _pipe = trainable_model.flux_pipe
+        logger.info("Loaded via OminiModelFIll (full precision)")
+
     _flux_config = flux_config
     _repo_path = repo
+
+    # Device placement / CPU offload
+    if offload == "sequential":
+        _pipe.enable_sequential_cpu_offload()
+        logger.info("Offload: sequential (per-layer)")
+    elif offload == "model":
+        _pipe.enable_model_cpu_offload()
+        logger.info("Offload: model (per-component)")
+    else:
+        _pipe = _pipe.to("cuda")
+        torch.cuda.empty_cache()
+        if quantize == "nf4":
+            logger.info("GPU: NF4 + T5 bf16 (~17GB VRAM)")
+        elif quantize == "8bit":
+            logger.info("GPU: 8-bit + T5 bf16 (~23GB VRAM)")
+        elif quantize == "8bit_all":
+            logger.info("GPU: 8-bit all (~18GB VRAM)")
+        else:
+            logger.info("GPU: full precision (~34GB VRAM)")
 
     font_path = os.environ.get(
         "FLUXTEXT_FONT_PATH",
@@ -107,6 +201,43 @@ def _init_model():
     _font = ImageFont.truetype(font_path, size=60)
 
     logger.info("FLUX-Text model loaded from %s", model_path)
+
+
+def _quantize_8bit(module):
+    """Replace all nn.Linear with 8-bit Linear8bitLt in-place.
+
+    Used for T5 encoder quantization (8bit_all mode).  Call while module
+    is on CPU; int8 quantization happens on first CUDA forward pass.
+    Returns the number of layers replaced.
+    """
+    import torch.nn as nn
+    import bitsandbytes as bnb
+
+    count = 0
+    for name, child in list(module.named_children()):
+        if isinstance(child, bnb.nn.Linear8bitLt):
+            continue
+        if isinstance(child, nn.Linear):
+            has_bias = child.bias is not None
+            new_module = bnb.nn.Linear8bitLt(
+                child.in_features,
+                child.out_features,
+                bias=has_bias,
+                has_fp16_weights=False,
+                threshold=6.0,
+            )
+            new_module.weight = bnb.nn.Int8Params(
+                child.weight.data.contiguous(),
+                requires_grad=False,
+                has_fp16_weights=False,
+            )
+            if has_bias:
+                new_module.bias = nn.Parameter(child.bias.data.contiguous())
+            setattr(module, name, new_module)
+            count += 1
+        elif len(list(child.children())) > 0:
+            count += _quantize_8bit(child)
+    return count
 
 
 # ------------------------------------------------------------------

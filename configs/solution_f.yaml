@@ -29,6 +29,9 @@
 #         none -> no quantization (default)
 #         nf4  -> 4-bit transformer (~6GB, needs bitsandbytes)
 #         fp8  -> 8-bit transformer (~12GB, needs optimum-quanto)
+#         8bit -> 8-bit transformer (~12GB, needs bitsandbytes, direct disk load)
+# Direct-load quantization (nf4/8bit/fp8) never materializes full-precision
+# weights in CPU RAM, so it works even with 32GB system memory.
 #
 # Advantages over AnyText2 (solution_a):
 #   - 10+ language support (vs Chinese+English)

@@ -18,6 +18,17 @@
 #   FLUXTEXT_CONFIG_PATH=/path/to/FluxText/train/config/word_multi_size.yaml
 #
 # VRAM: 34GB (512x512) / 25GB (low-VRAM mode)
+# Quantization (FLUXTEXT_QUANTIZE env var on server):
+#   none    -> full precision via OminiModelFIll, needs ~34GB CPU RAM
+#   nf4     -> 4-bit direct disk load, ~6GB transformer, ~16GB CPU RAM
+#   8bit    -> 8-bit direct disk load, ~12GB transformer, ~23GB CPU RAM
+#   8bit_all-> 8-bit transformer + T5, ~18GB CPU RAM
+# CPU offload (FLUXTEXT_OFFLOAD): none / model / sequential
+#   Defaults to "model" when quantize != "none"
+# A10 24GB + 32GB RAM: use nf4 + model (or 8bit + model)
+# Default (8bit + model): best quality for A10 24GB + 32GB RAM
+#   8-bit transformer (T5 stays bf16), ~23GB CPU RAM, ~14GB VRAM peak
+#   No env vars needed — 8bit + model are the server defaults.
 extends: base.yaml
 solution_name: solution_e
 
