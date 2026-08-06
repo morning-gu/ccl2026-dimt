@@ -81,6 +81,7 @@ def _init_model():
 
     quantize = os.environ.get("FLUXTEXT_QUANTIZE", "8bit").lower()
     offload_default = "model" if quantize != "none" else "none"
+    offload = os.environ.get("FLUXTEXT_OFFLOAD", offload_default).lower()
 
     import yaml
     import torch
