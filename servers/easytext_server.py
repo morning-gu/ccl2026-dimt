@@ -16,10 +16,12 @@ Prerequisites:
     "none"       - load everything onto GPU (.to("cuda")), needs ~34GB VRAM
     "model"      - per-component CPU offload (default), needs ~12-16GB VRAM
     "sequential" - per-layer CPU offload, needs ~8-10GB VRAM (slowest)
-  - Set EASYTEXT_QUANT to quantize the transformer for lower VRAM:
-    "none" - no quantization (default)
-    "nf4"  - 4-bit NormalFloat via bitsandbytes, transformer ~6GB
-    "fp8"  - 8-bit float via optimum-quanto, transformer ~12GB
+ - Set EASYTEXT_QUANT to quantize the transformer for lower VRAM:
+   "none" - no quantization (default)
+   "nf4"  - 4-bit NormalFloat via bitsandbytes, transformer ~6GB
+   "fp8"  - 8-bit float via optimum-quanto, transformer ~12GB
+   "8bit" - 8-bit int via bitsandbytes, transformer ~12GB
+           (direct load from disk, no full-precision CPU RAM needed)
 
 Usage:
   python easytext_server.py --host 0.0.0.0 --port 8001
@@ -77,7 +79,7 @@ def _init_model():
 
     quant = os.environ.get("EASYTEXT_QUANT", "none").lower()
 
-    if quant in ("nf4", "fp8"):
+    if quant in ("nf4", "fp8", "8bit"):
         from diffusers import FluxTransformer2DModel
 
         if quant == "nf4":
@@ -89,9 +91,17 @@ def _init_model():
             )
             logger.info("Quantization: NF4 (4-bit, needs bitsandbytes)")
         else:
-            from optimum.quanto import QuantoConfig
-            qconfig = QuantoConfig(weights_dtype="float8")
-            logger.info("Quantization: FP8 (8-bit, needs optimum-quanto)")
+            if quant == "fp8":
+                from optimum.quanto import QuantoConfig
+                qconfig = QuantoConfig(weights_dtype="float8")
+                logger.info("Quantization: FP8 (8-bit float, needs optimum-quanto)")
+            else:  # 8bit
+                from diffusers import BitsAndBytesConfig
+                qconfig = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_has_fp16_weight=False,
+                )
+                logger.info("Quantization: 8-bit int (needs bitsandbytes)")
 
         transformer = FluxTransformer2DModel.from_pretrained(
             flux_path,
@@ -123,9 +133,12 @@ def _init_model():
 
     if pretrain_lora:
         pipeline.load_lora_weights(pretrain_lora)
-        pipeline.fuse_lora()
-        pipeline.unload_lora_weights()
-        logger.info("EasyText pretrain LoRA fused from %s", pretrain_lora)
+        if quant == "none":
+            pipeline.fuse_lora()
+            pipeline.unload_lora_weights()
+            logger.info("EasyText pretrain LoRA fused from %s", pretrain_lora)
+        else:
+            logger.info("EasyText pretrain LoRA loaded (not fused, quantized model) from %s", pretrain_lora)
 
     if finetune_lora:
         pipeline.load_lora_weights(finetune_lora)
