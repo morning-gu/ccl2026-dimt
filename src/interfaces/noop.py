@@ -1,4 +1,4 @@
-﻿"""NoOp plugin implementations (Null Object Pattern)."""
+"""NoOp plugin implementations (Null Object Pattern)."""
 from typing import List, Tuple, Dict
 import numpy as np
 from common.selective_translator import TextRegion
@@ -7,6 +7,8 @@ from .context_analyzer import IContextAnalyzerPlugin
 from .product_classifier import IProductClassifierPlugin
 from .box_resizer import IBoxResizerPlugin
 from .quality_checker import IQualityCheckerPlugin
+from .translator import ITranslatorPlugin
+from .classifier import IClassifierPlugin
 
 
 class NoOpStyleExtractor(IStyleExtractorPlugin):
@@ -42,3 +44,27 @@ class NoOpQualityChecker(IQualityCheckerPlugin):
         pass
     def check(self, original, result, regions):
         return {}
+
+class NoOpTranslator(ITranslatorPlugin):
+    """NoOp translator: copies text as-is (for renderer roundtrip eval)."""
+
+    def __init__(self, config):
+        pass
+
+    def translate_regions(self, regions, target_lang, image_context=""):
+        for r in regions:
+            r.translated_text = r.text
+        return regions
+
+
+class NoOpClassifier(IClassifierPlugin):
+    """NoOp classifier: marks all regions as translatable."""
+
+    def __init__(self, config):
+        pass
+
+    def classify_regions(self, regions):
+        for r in regions:
+            r.is_translatable = True
+            r.region_type = "text"
+        return regions
