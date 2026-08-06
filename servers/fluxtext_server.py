@@ -52,8 +52,21 @@ from _shared import (
 logger = logging.getLogger("fluxtext_server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 # bitsandbytes 8-bit matmul casts bf16->fp16 on every forward pass and
-# spams INFO logs; silence it (warnings/errors still surface).
-logging.getLogger("bitsandbytes").setLevel(logging.WARNING)
+# spams an INFO line each time. bitsandbytes re-sets its logger level on
+# import, so setLevel alone is unreliable -- install a root Filter that
+# drops only that specific cast notice (warnings/errors still surface).
+
+
+class _BnbMatmulCastFilter(logging.Filter):
+    def filter(self, record):
+        if record.name.startswith("bitsandbytes") and record.levelno == logging.INFO:
+            msg = record.getMessage()
+            if "MatMul8bitLt" in msg and "cast from" in msg:
+                return False
+        return True
+
+
+logging.getLogger().addFilter(_BnbMatmulCastFilter())
 
 _pipe = None
 _flux_config = None
