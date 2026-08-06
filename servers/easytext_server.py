@@ -227,9 +227,22 @@ def _build_condition_image(
 def _build_position_data(
     regions: List[RegionData],
     src_positions: List[Tuple],
-    height: int,
-    width: int,
+    orig_h: int,
+    orig_w: int,
+    tgt_h: int,
+    tgt_w: int,
 ) -> list:
+    """Build ICPA position mapping ([dst_quad, src_rect], ...).
+
+    The destination quad comes from the source image text bbox in original
+    pixel space (orig_h x orig_w). The FLUX pipeline generates at (tgt_h,
+    tgt_w) and ``prepare_img_ids_new`` interprets destination coordinates in
+    that generation canvas, so the quad is rescaled and clamped to the canvas
+    before being written to the position file.
+    """
+    sx = tgt_w / orig_w if orig_w else 1.0
+    sy = tgt_h / orig_h if orig_h else 1.0
+
     position_data = []
 
     for i, r in enumerate(regions):
@@ -241,10 +254,20 @@ def _build_position_data(
         src_rect = [list(src_positions[i][0]), list(src_positions[i][1])]
 
         if r.bbox_poly and len(r.bbox_poly) >= 4:
-            dst_quad = [list(p) for p in r.bbox_poly[:4]]
+            dst_quad = [[float(p[0]) * sx, float(p[1]) * sy] for p in r.bbox_poly[:4]]
         else:
-            x1, y1, x2, y2 = [int(v) for v in r.bbox[:4]]
-            dst_quad = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+            x1, y1, x2, y2 = [float(v) for v in r.bbox[:4]]
+            dst_quad = [
+                [x1 * sx, y1 * sy],
+                [x2 * sx, y1 * sy],
+                [x2 * sx, y2 * sy],
+                [x1 * sx, y2 * sy],
+            ]
+
+        dst_quad = [
+            [min(max(px, 0.0), float(tgt_w)), min(max(py, 0.0), float(tgt_h))]
+            for px, py in dst_quad
+        ]
 
         position_data.append([dst_quad, src_rect])
 
@@ -329,6 +352,14 @@ def _match_resolution(height: int, width: int) -> Tuple[int, int]:
     tgt_w = int(math.sqrt(target_pixels * aspect) // 16) * 16
     tgt_h = int(target_pixels / tgt_w // 16) * 16
 
+    # EasyText prepare_img_ids_new hardcodes a max latent width (target_width_=70),
+    # so the generation width must satisfy tgt_w // 16 <= 70. Cap wide canvases
+    # while preserving the source aspect ratio to avoid a negative np.pad.
+    max_w = 70 * 16
+    if tgt_w > max_w:
+        tgt_w = max_w
+        tgt_h = int(tgt_w / aspect // 16) * 16
+
     tgt_w = max(tgt_w, 256)
     tgt_h = max(tgt_h, 256)
 
@@ -393,7 +424,7 @@ def _render_easytext(
     if condition_image is None:
         return erased_image
 
-    position_data = _build_position_data(regions, src_positions, tgt_h, tgt_w)
+    position_data = _build_position_data(regions, src_positions, h, w, tgt_h, tgt_w)
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix="-position.txt", delete=False, encoding="utf-8"
