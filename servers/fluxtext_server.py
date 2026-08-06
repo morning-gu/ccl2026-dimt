@@ -51,6 +51,9 @@ from _shared import (
 
 logger = logging.getLogger("fluxtext_server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
+# bitsandbytes 8-bit matmul casts bf16->fp16 on every forward pass and
+# spams INFO logs; silence it (warnings/errors still surface).
+logging.getLogger("bitsandbytes").setLevel(logging.WARNING)
 
 _pipe = None
 _flux_config = None
