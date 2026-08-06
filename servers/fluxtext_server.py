@@ -466,7 +466,7 @@ def _render_fluxtext(image, regions):
 
     glyph_rgb = np.stack([glyph_resized] * 3, axis=-1)
     glyph_norm = (255 - glyph_rgb.astype(np.float64)) / 255.0
-    mask_norm = mask_resized.astype(np.float64) / 255.0
+    mask_norm = np.expand_dims(mask_resized.astype(np.float64) / 255.0, axis=-1)
     condition_img = [glyph_norm, mask_norm, img_resized]
 
     prompt = _build_prompt(img_resized, regions)
