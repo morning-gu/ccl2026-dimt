@@ -21,6 +21,10 @@
 #
 # VRAM: ~24GB (1024x1024, bfloat16, 20 steps)
 #       ~16GB (with CPU offloading via accelerate)
+#       Controlled by EASYTEXT_OFFLOAD env var on the server:
+#         none       -> ~34GB (full GPU residency)
+#         model      -> ~12-16GB (per-component offload, default)
+#         sequential -> ~8-10GB (per-layer offload, slowest)
 #
 # Advantages over AnyText2 (solution_a):
 #   - 10+ language support (vs Chinese+English)

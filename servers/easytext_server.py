@@ -1,4 +1,4 @@
-"""EasyText rendering API server.
+﻿"""EasyText rendering API server.
 
 Wraps songyiren725/EasyText (FLUX DiT + LoRA) as a standalone FastAPI service.
 The pipeline plugin calls this server via HTTP instead of importing the
@@ -12,6 +12,10 @@ Prerequisites:
   - pip install -r EasyText/requirements.txt  (flash_attn, diffusers, torch, ...)
   - Set EASYTEXT_REPO_PATH, EASYTEXT_FLUX_PATH, EASYTEXT_PRETRAIN_LORA,
     EASYTEXT_FINETUNE_LORA, EASYTEXT_FONT_PATH env vars.
+  - Set EASYTEXT_OFFLOAD to control GPU memory strategy:
+    "none"       - load everything onto GPU (.to("cuda")), needs ~34GB VRAM
+    "model"      - per-component CPU offload (default), needs ~12-16GB VRAM
+    "sequential" - per-layer CPU offload, needs ~8-10GB VRAM (slowest)
 
 Usage:
   python easytext_server.py --host 0.0.0.0 --port 8001
@@ -70,7 +74,18 @@ def _init_model():
     pipeline = FluxPipeline.from_pretrained(
         flux_path,
         torch_dtype=torch.bfloat16,
-    ).to("cuda")
+    )
+
+    offload = os.environ.get("EASYTEXT_OFFLOAD", "model").lower()
+    if offload == "none":
+        pipeline = pipeline.to("cuda")
+        logger.info("GPU offload: none (full GPU residency, ~34GB VRAM)")
+    elif offload == "sequential":
+        pipeline.enable_sequential_cpu_offload()
+        logger.info("GPU offload: sequential (per-layer, ~8-10GB VRAM)")
+    else:
+        pipeline.enable_model_cpu_offload()
+        logger.info("GPU offload: model (per-component, ~12-16GB VRAM)")
 
     if pretrain_lora:
         pipeline.load_lora_weights(pretrain_lora)
@@ -84,6 +99,7 @@ def _init_model():
 
     _pipeline = pipeline
     _repo_path = repo
+
 
     font_path = os.environ.get(
         "EASYTEXT_FONT_PATH",
