@@ -75,9 +75,9 @@ def _init_model():
             len(missing), len(unexpected),
         )
     _model.eval()
-    _device = "cuda" if os.environ.get("DEVICE", "cuda") == "cuda" else "cpu"
-    if _device == "cuda":
-        _model = _model.cuda()
+    want_cuda = os.environ.get("DEVICE", "cuda") == "cuda"
+    _device = "cuda" if (want_cuda and torch.cuda.is_available()) else "cpu"
+    _model = _model.to(_device)
     logger.info("SSER (STRnet2) initialized from %s", ckpt)
 
 

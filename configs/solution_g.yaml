@@ -1,0 +1,14 @@
+extends: base.yaml
+solution_name: solution_g
+
+plugins:
+  ocr: rapidocr
+  classifier: ecommerce
+  style_extractor: noop
+  context_analyzer: noop
+  product_classifier: product
+  translator: context_aware
+  eraser: sser
+  box_resizer: noop
+  renderer: pil
+  quality_checker: competition

@@ -336,7 +336,8 @@ class CompetitionQualityCheckerPlugin(IQualityCheckerPlugin):
     def _t_ocr(self, result, translated, w, h):
         ocr = self._ensure_ocr()
         if not ocr or not translated:
-            return 0.0, self._t_hallu_no_ocr(result, translated, w, h)
+            est = self._t_hallu_no_ocr(result, translated, w, h)
+            return est, est
         sims = []
         for r in translated:
             x1, y1, x2, y2 = _clip_box(r.bbox, w, h)
