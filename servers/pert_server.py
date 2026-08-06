@@ -16,6 +16,8 @@ import os
 import sys
 from typing import List
 
+from contextlib import asynccontextmanager
+
 import numpy as np
 from fastapi import FastAPI
 
@@ -30,8 +32,6 @@ from _shared import (
 
 logger = logging.getLogger("pert_server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
-
-app = FastAPI(title="PERT Eraser API")
 
 _model = None
 _device = None
@@ -92,11 +92,17 @@ def _erase_pert(image, regions: List[RegionData], dilate_pixels: int) -> np.ndar
     return out
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _init_model()
+    yield
+
+
+app = FastAPI(title="PERT Eraser API", lifespan=lifespan)
+
+
 @app.post("/erase", response_model=RenderResponse)
 def erase(req: EraseRequest):
-    if _model is None:
-        _init_model()
-
     image, regions, dilate_pixels = decode_erase_request(req)
     if not regions:
         return RenderResponse(image=encode_image(image))

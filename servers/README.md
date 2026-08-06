@@ -160,7 +160,8 @@ Response:
 - Images are encoded as base64 PNG.  For 1024x1024 images this is ~1.4 MB
   per request; on localhost or a fast LAN the overhead is negligible.
 - Each server lazy-loads its model on the first request.  Use `GET /health`
-  to check if the model is loaded.
+- Each server loads its model at startup via FastAPI's ``lifespan`` handler.
+  `GET /health` confirms the server is ready.
 - Timeout defaults to 120 seconds.  Override with `<NAME>_API_TIMEOUT`.
 - Servers can run on different machines (e.g. a GPU server) from the
   pipeline client.

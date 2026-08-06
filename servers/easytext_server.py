@@ -25,6 +25,8 @@ import sys
 import tempfile
 from typing import List, Optional, Tuple
 
+from contextlib import asynccontextmanager
+
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -39,12 +41,6 @@ from _shared import (
 
 logger = logging.getLogger("easytext_server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
-
-app = FastAPI(title="EasyText Renderer API")
-
-# ------------------------------------------------------------------
-# Global model state (lazy-loaded on first request)
-# ------------------------------------------------------------------
 
 _pipeline = None
 _repo_path = None
@@ -373,11 +369,17 @@ def _render_easytext(
 # FastAPI endpoint
 # ------------------------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _init_model()
+    yield
+
+
+app = FastAPI(title="EasyText Renderer API", lifespan=lifespan)
+
+
 @app.post("/render", response_model=RenderResponse)
 def render(req: RenderRequest):
-    if _pipeline is None:
-        _init_model()
-
     image, regions, style_ref = decode_request(req)
     if not regions:
         return RenderResponse(image=encode_image(image))
