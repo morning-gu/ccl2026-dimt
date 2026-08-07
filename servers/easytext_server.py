@@ -13,8 +13,8 @@ Prerequisites:
   - Set EASYTEXT_REPO_PATH, EASYTEXT_FLUX_PATH, EASYTEXT_PRETRAIN_LORA,
     EASYTEXT_FINETUNE_LORA, EASYTEXT_FONT_PATH env vars.
   - Set EASYTEXT_OFFLOAD to control GPU memory strategy:
-    "none"       - load everything onto GPU (.to("cuda")), needs ~34GB VRAM
-    "model"      - per-component CPU offload (default), needs ~12-16GB VRAM
+    "none"       - load everything onto GPU (.to("cuda")), needs ~18GB VRAM with NF4 (default)
+    "model"      - per-component CPU offload, needs ~12-16GB VRAM but ~28GB RAM
     "sequential" - per-layer CPU offload, needs ~8-10GB VRAM (slowest)
   - Set EASYTEXT_QUANT to quantize the transformer for lower VRAM:
     "none" - no quantization
@@ -183,7 +183,7 @@ def _init_model():
             torch_dtype=torch.bfloat16,
         )
 
-    offload = os.environ.get("EASYTEXT_OFFLOAD", "model").lower()
+    offload = os.environ.get("EASYTEXT_OFFLOAD", "none").lower()
     if offload == "none":
         pipeline = pipeline.to("cuda")
         logger.info("GPU offload: none (full GPU residency, ~34GB VRAM)")
