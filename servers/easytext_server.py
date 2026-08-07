@@ -76,6 +76,7 @@ def _init_model():
     # Monkey-patch: fix hardcoded target_width_ in prepare_img_ids_new
     # EasyText hardcodes target_width_=70 but layout width is dynamic,
     # causing ValueError when layout_width > 70.
+    import einops
     import src.pipeline_pe_clone_multisample as _et_pipe
     _orig_prepare_img_ids_new = _et_pipe.prepare_img_ids_new
 
