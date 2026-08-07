@@ -17,8 +17,8 @@ Environment variables (server-side):
   FLUXTEXT_CONFIG_PATH     Path to FluxText config YAML
   FLUXTEXT_FONT_PATH       Path to font file (optional)
   FLUXTEXT_QUANTIZE        Quantization (direct disk load, bypasses OminiModelFIll):
-                            "8bit" (default, 8-bit transformer, ~12GB CPU RAM),
-                            "nf4" (4-bit transformer, ~6GB CPU RAM),
+                            "nf4" (default, 4-bit NF4 transformer + bf16 compute, ~6GB),
+                            "8bit" (8-bit transformer, fp16 compute, ~12GB),
                             "none" (full precision via OminiModelFIll, ~34GB RAM),
                             "8bit_all" (8-bit transformer + T5 encoder)
   FLUXTEXT_OFFLOAD         CPU offload: "none", "model" (per-component),
@@ -95,7 +95,7 @@ def _init_model():
             "to the LoRA weights and config YAML respectively."
         )
 
-    quantize = os.environ.get("FLUXTEXT_QUANTIZE", "8bit").lower()
+    quantize = os.environ.get("FLUXTEXT_QUANTIZE", "nf4").lower()
     offload_default = "model" if quantize != "none" else "none"
     offload = os.environ.get("FLUXTEXT_OFFLOAD", offload_default).lower()
 
@@ -133,6 +133,7 @@ def _init_model():
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_use_double_quant=True,
             )
             logger.info("Direct load: NF4 4-bit transformer (~6GB CPU RAM)")
         else:
