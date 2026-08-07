@@ -185,14 +185,19 @@ def _init_model():
 
     offload = os.environ.get("EASYTEXT_OFFLOAD", "none").lower()
     if offload == "none":
-        pipeline = pipeline.to("cuda")
-        logger.info("GPU offload: none (full GPU residency, ~34GB VRAM)")
+        # Move components individually to bypass pipeline.to() check
+        # that requires accelerate>=1.1.0 for bitsandbytes models
+        for _name, _comp in pipeline.components.items():
+            if isinstance(_comp, torch.nn.Module):
+                _comp.to("cuda")
+        logger.info("GPU offload: none (full GPU residency, ~18GB VRAM with NF4)")
     elif offload == "sequential":
         pipeline.enable_sequential_cpu_offload()
         logger.info("GPU offload: sequential (per-layer, ~8-10GB VRAM)")
     else:
         pipeline.enable_model_cpu_offload()
         logger.info("GPU offload: model (per-component, ~12-16GB VRAM)")
+
 
     if pretrain_lora:
         pipeline.load_lora_weights(pretrain_lora)
