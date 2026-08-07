@@ -73,6 +73,68 @@ def _init_model():
     import torch
     from src.pipeline_pe_clone_multisample import FluxPipeline
 
+    # Monkey-patch: fix hardcoded target_width_ in prepare_img_ids_new
+    # EasyText hardcodes target_width_=70 but layout width is dynamic,
+    # causing ValueError when layout_width > 70.
+    import src.pipeline_pe_clone_multisample as _et_pipe
+    _orig_prepare_img_ids_new = _et_pipe.prepare_img_ids_new
+
+    def _patched_prepare_img_ids_new(batch_size, packed_latent_height_layout, packed_latent_width_layout, packed_latent_height_img, packed_latent_width_img, position_lists):
+        all_img_ids_layout = []
+        for position_list in position_lists:
+            img_ids = torch.zeros(packed_latent_height_img, packed_latent_width_img, 3)
+            img_ids[..., 1] = img_ids[..., 1] + torch.arange(packed_latent_height_img)[:, None]
+            img_ids[..., 2] = img_ids[..., 2] + torch.arange(packed_latent_width_img)[None, :]
+            img_ids_np = img_ids.numpy().copy()
+            target_width_ = packed_latent_width_layout
+            pad_width = target_width_ - packed_latent_width_img
+            if pad_width > 0:
+                img_ids_np = np.pad(img_ids_np, ((0, 0), (0, pad_width), (0, 0)), mode="constant")
+
+            layout_width = packed_latent_width_layout
+            layout_height = packed_latent_height_layout
+            img_ids_layout = torch.zeros(layout_height, layout_width, 3)
+            img_ids_np_layout = img_ids_layout.numpy()
+            for src_pts_list, dst_pts_2_list in position_list:
+                src_pts = np.array(src_pts_list, dtype=np.float32)
+                dst_top_left = np.array(dst_pts_2_list[0], dtype=np.float32)
+                dst_bottom_right = np.array(dst_pts_2_list[1], dtype=np.float32)
+                src_pts = src_pts // 16
+                dst_top_left //= 16
+                dst_bottom_right //= 16
+
+                dst_pts_2 = np.array([
+                    dst_top_left,
+                    [dst_bottom_right[0], dst_top_left[1]],
+                    dst_bottom_right,
+                    [dst_top_left[0], dst_bottom_right[1]]
+                ], dtype=np.float32)
+
+                tps = cv2.createThinPlateSplineShapeTransformer()
+                sourceshape = src_pts.reshape(1, -1, 2)
+                targetshape = dst_pts_2.reshape(1, -1, 2)
+                matches = [cv2.DMatch(i, i, 0) for i in range(len(src_pts))]
+                tps.estimateTransformation(targetshape, sourceshape, matches)
+                warped_img = tps.warpImage(img_ids_np)
+
+                x_min, y_min = map(int, dst_top_left)
+                x_max, y_max = map(int, dst_bottom_right)
+
+                warped_crop = warped_img[y_min:y_max+1, x_min:x_max+1]
+                img_ids_np_layout[y_min:y_max+1, x_min:x_max+1] = warped_crop
+
+            img_ids_tensor = torch.from_numpy(img_ids_np_layout).float()
+            all_img_ids_layout.append(img_ids_tensor)
+        img_ids = einops.repeat(img_ids, "h w c -> b (h w) c", b=batch_size)
+        img_ids_batch = torch.stack(all_img_ids_layout, dim=0)
+        img_ids_batch = img_ids_batch.view(batch_size, -1, 3)
+        img_ids = torch.cat((img_ids, img_ids_batch), dim=1)
+        img_ids = img_ids.squeeze(0)
+        return img_ids
+
+    _et_pipe.prepare_img_ids_new = _patched_prepare_img_ids_new
+    logger.info("Applied monkey-patch: fix prepare_img_ids_new target_width_")
+
     flux_path = os.environ.get("EASYTEXT_FLUX_PATH", "black-forest-labs/FLUX.1-dev")
     pretrain_lora = os.environ.get("EASYTEXT_PRETRAIN_LORA", "")
     finetune_lora = os.environ.get("EASYTEXT_FINETUNE_LORA", "")
